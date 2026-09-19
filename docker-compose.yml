@@ -1,0 +1,17 @@
+name: monopoly
+
+services:
+  app:
+    build: .
+    environment:
+      - TZ=Europe/Berlin
+    ports:
+      # Nur intern auf dem Pi erreichbar (127.0.0.1:8099) - ein bereits
+      # laufender Reverse Proxy auf dem Pi kann eine Subdomain (z.B.
+      # monopoly.oualid.de) hierher routen, analog zu wizard.oualid.de -> 8093.
+      # Port 8099 gewählt, weil 8080/8081/8090/8091/8092/8093/8443 schon von
+      # anderen Projekten (FinanceAgent, Monitoring Shop, Widerstand, Wizard)
+      # belegt sind, 8094 vom Spielehub selbst, und 8095-8098 von Bluff,
+      # Tempel des Schreckens, Poker und Munchkin.
+      - "127.0.0.1:8099:3000"
+    restart: unless-stopped
