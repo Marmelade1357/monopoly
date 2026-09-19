@@ -2,6 +2,7 @@
 // Einfacher, selbst-gehosteter Mehrspieler-Server auf Basis von Express + Socket.IO.
 // Regelwerk: siehe src/engine.js (deutsche Hasbro-Edition 2017).
 
+const fs = require('fs');
 const path = require('path');
 const http = require('http');
 const express = require('express');
@@ -15,6 +16,19 @@ const server = http.createServer(app);
 const io = new Server(server);
 
 const PORT = process.env.PORT || 3000;
+
+// index.html wird mit Versionsnummer an den Dateinamen ausgeliefert (?v=Startzeit),
+// damit Browser und Zwischen-Caches nach jedem Neustart garantiert frische Dateien laden.
+const BUILD_ID = Date.now().toString(36);
+function serveIndex(req, res) {
+  fs.readFile(path.join(__dirname, 'public', 'index.html'), 'utf8', (err, html) => {
+    if (err) return res.status(500).send('index.html fehlt');
+    const out = html.replace(/(href|src)="(style\.css|client\.js|board-data\.js)"/g, `$1="$2?v=${BUILD_ID}"`);
+    res.setHeader('Cache-Control', 'no-cache');
+    res.type('html').send(out);
+  });
+}
+app.get(['/', '/index.html'], serveIndex);
 
 // Dateien immer neu prüfen (ETag), damit nach einem Update nie alter Client-Code aus dem Cache läuft.
 app.use(express.static(path.join(__dirname, 'public'), {

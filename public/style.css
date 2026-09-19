@@ -510,3 +510,50 @@ input:focus, select:focus { outline: 2px solid var(--accent-bright); }
 .rule-item small { color: var(--text-dim); font-size: 0.78rem; line-height: 1.35; }
 .rule-item.locked { cursor: default; opacity: 0.85; }
 .sq-pot { color: #b3261e; font-weight: 800; }
+
+/* Knast-Animation: Gitter fallen über das Brett */
+.jail-anim { position: absolute; inset: 0; overflow: hidden; z-index: 30; pointer-events: none; display: flex; align-items: center; justify-content: center; background: rgba(10,20,40,0); animation: jail-dim 0.4s forwards; transition: opacity 0.4s; }
+.jail-anim.out { opacity: 0; }
+.jail-bars { position: absolute; inset: 0; display: flex; justify-content: space-around; }
+.jail-bars i { width: 2.2%; height: 100%; background: linear-gradient(90deg, #4a4f57, #b8bec8 45%, #4a4f57); border-radius: 0 0 1cqw 1cqw; box-shadow: 0 0 1.5cqw rgba(0,0,0,0.6); transform: translateY(-105%); animation: bar-fall 0.55s cubic-bezier(.4,1.5,.5,1) forwards; animation-delay: calc(var(--i) * 0.07s); }
+.jail-text { position: relative; z-index: 2; background: #14261b; color: #fff; padding: 2cqw 4cqw; border-radius: 1.6cqw; border: 0.4cqw solid var(--gold); text-align: center; font-weight: 900; font-size: 3cqw; transform: scale(0.6); opacity: 0; animation: jail-pop 0.4s 0.5s forwards; box-shadow: 0 1cqw 3cqw rgba(0,0,0,0.6); }
+.jail-ico { font-size: 6cqw; line-height: 1.1; }
+@keyframes bar-fall { to { transform: translateY(0); } }
+@keyframes jail-pop { to { transform: scale(1); opacity: 1; } }
+@keyframes jail-dim { to { background: rgba(10,20,40,0.45); } }
+
+/* ---- Leben im Spiel ---- */
+.tk.hop { animation: tk-hop 0.23s ease-out; }
+@keyframes tk-hop { 0% { transform: translateY(0) scale(1); } 40% { transform: translateY(-1.6cqw) scale(1.15); } 75% { transform: translateY(0) scale(0.9, 1.1); } 100% { transform: translateY(0) scale(1); } }
+
+.sq.claimed { animation: sq-claim 1.4s ease-out; z-index: 4; }
+@keyframes sq-claim { 0% { transform: scale(1); filter: brightness(1); } 25% { transform: scale(1.18); filter: brightness(1.35); } 55% { transform: scale(0.97); } 100% { transform: scale(1); filter: brightness(1); } }
+.sq .band .pop { animation: build-pop 0.6s cubic-bezier(.3,1.6,.5,1); }
+@keyframes build-pop { 0% { transform: scale(0) translateY(-1cqw); } 100% { transform: scale(1) translateY(0); } }
+
+.float-text { position: fixed; z-index: 500; pointer-events: none; font-weight: 900; font-size: 1.6rem; transform: translate(-50%, -50%); text-shadow: 0 2px 6px rgba(0,0,0,0.7); animation: float-up 1.6s ease-out forwards; }
+.float-text.gain { color: #5df0a5; }
+.float-text.loss { color: #ff7a85; }
+@keyframes float-up { 0% { opacity: 0; transform: translate(-50%, -20%) scale(0.7); } 15% { opacity: 1; transform: translate(-50%, -80%) scale(1.25); } 100% { opacity: 0; transform: translate(-50%, -260%) scale(1); } }
+.coin { position: fixed; z-index: 500; pointer-events: none; font-size: 1.5rem; filter: drop-shadow(0 2px 3px rgba(0,0,0,0.5)); }
+.money-up { color: #5df0a5 !important; }
+.money-down { color: #ff7a85 !important; }
+
+.splash { position: absolute; left: 50%; top: 30%; z-index: 28; pointer-events: none; white-space: nowrap; transform: translate(-50%, -50%);
+  background: rgba(20,38,27,0.94); color: #fff; font-weight: 900; font-size: 3.4cqw; padding: 1.4cqw 3.4cqw; border-radius: 1.6cqw; border: 0.35cqw solid var(--gold);
+  box-shadow: 0 1cqw 3cqw rgba(0,0,0,0.5); animation: splash-in 1.4s ease-out forwards; }
+.splash.mine { background: #1a7a4c; border-color: #b9ffd9; }
+.splash.pasch { background: #c62828; border-color: #ffd54f; font-size: 5cqw; transform: translate(-50%, -50%) rotate(-6deg); animation-name: splash-pasch; }
+@keyframes splash-in { 0% { opacity: 0; transform: translate(-50%, -30%) scale(0.5); } 15% { opacity: 1; transform: translate(-50%, -50%) scale(1.08); } 25% { transform: translate(-50%, -50%) scale(1); } 80% { opacity: 1; } 100% { opacity: 0; transform: translate(-50%, -70%) scale(1); } }
+@keyframes splash-pasch { 0% { opacity: 0; transform: translate(-50%, -50%) rotate(-6deg) scale(0.2); } 20% { opacity: 1; transform: translate(-50%, -50%) rotate(-6deg) scale(1.25); } 35% { transform: translate(-50%, -50%) rotate(-6deg) scale(1); } 80% { opacity: 1; } 100% { opacity: 0; transform: translate(-50%, -50%) rotate(-6deg) scale(1.1); } }
+
+.event-feed li.fresh { animation: feed-in 0.5s ease-out; }
+@keyframes feed-in { 0% { opacity: 0; transform: translateX(16px); background: rgba(244,201,93,0.35); } 100% { opacity: 1; transform: none; background: transparent; } }
+.pp-row.turn { animation: turn-glow 1.8s ease-in-out infinite; }
+@keyframes turn-glow { 0%, 100% { box-shadow: 0 0 0 1px var(--gold) inset, 0 0 0 rgba(244,201,93,0); } 50% { box-shadow: 0 0 0 1px var(--gold) inset, 0 0 14px rgba(244,201,93,0.55); } }
+.logo { animation: logo-sway 6s ease-in-out infinite; }
+@keyframes logo-sway { 0%, 100% { transform: rotate(-3deg) translateY(0); } 50% { transform: rotate(-1.5deg) translateY(-0.5cqw); } }
+.deck { animation: deck-bob 4s ease-in-out infinite; }
+@keyframes deck-bob { 0%, 100% { translate: 0 0; } 50% { translate: 0 -0.4cqw; } }
+.confetti { position: fixed; top: -20px; width: 10px; height: 16px; z-index: 600; pointer-events: none; animation: confetti-fall linear forwards; }
+@keyframes confetti-fall { 0% { transform: translate(0, 0) rotate(0); opacity: 1; } 100% { transform: translate(var(--dx), 110vh) rotate(720deg); opacity: 0.9; } }
