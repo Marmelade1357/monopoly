@@ -35,17 +35,3 @@ npm install
 npm start          # http://localhost:3000
 npm test           # Regeln, 40 Bot-Partien mit Invarianten-Check, Socket-Ablauf
 ```
-
-## Deployment (Raspberry Pi, analog zu „Poker“ / „Wizard“)
-
-```bash
-./deploy.sh
-```
-
-Der Container lauscht intern auf Port 3000 und wird laut `docker-compose.yml` nur auf `127.0.0.1:8099` veröffentlicht. Über den **Spielehub** ist das Spiel dann unter `games.oualid.de/monopoly/` erreichbar (`../Spielehub`: Kachel in `public/index.html`, Route in `nginx.conf`) – `public/client.js` erkennt das `/monopoly`-Präfix selbstständig.
-
-## Vereinfachungen gegenüber dem Brettspiel
-
-- Bankrott an die Bank: die Grundstücke werden einzeln versteigert (wie im Regelwerk); Gebäude werden vorher zum halben Preis verkauft.
-- Erbt jemand beliehene Grundstücke, zahlt er die 10 % Zinsen sofort (soweit das Bargeld reicht), lösen kann er sie später.
-- Wird das letzte Haus/Hotel knapp, gibt es keine Versteigerung – wer zuerst baut, bekommt es.
