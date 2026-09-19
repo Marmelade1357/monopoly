@@ -16,7 +16,10 @@ const io = new Server(server);
 
 const PORT = process.env.PORT || 3000;
 
-app.use(express.static(path.join(__dirname, 'public')));
+// Dateien immer neu prüfen (ETag), damit nach einem Update nie alter Client-Code aus dem Cache läuft.
+app.use(express.static(path.join(__dirname, 'public'), {
+  setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache'),
+}));
 
 // ---------------------------------------------------------------------------
 // Konstanten
