@@ -35,3 +35,7 @@ npm install
 npm start          # http://localhost:3000
 npm test           # Regeln, 40 Bot-Partien mit Invarianten-Check, Socket-Ablauf
 ```
+
+## Hausregeln (in der Lobby wählbar)
+
+Der Host kann vor dem Start Regeln ein- oder ausschalten: Frei-Parken-Jackpot, doppeltes Gehalt auf LOS, Auktionen, Miete im Knast und gleichmäßiges Bauen (siehe RULE_DEFAULTS in src/engine.js).

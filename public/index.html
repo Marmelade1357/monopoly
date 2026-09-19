@@ -76,6 +76,15 @@
     </div>
     <p id="lobby-settings-display" class="hint hidden"></p>
 
+    <h3 class="rules-h">Hausregeln</h3>
+    <div id="lobby-rules" class="rule-list">
+      <label class="rule-item"><input type="checkbox" data-rule="freeParking"><span><b>💰 Frei-Parken-Jackpot</b><small>Steuern, Kautionen und Strafen landen in der Tischmitte. Wer auf „Frei Parken“ landet, kassiert alles.</small></span></label>
+      <label class="rule-item"><input type="checkbox" data-rule="doubleGo"><span><b>🎯 Doppeltes Gehalt auf LOS</b><small>Wer genau auf LOS landet, erhält 400 statt 200 Taler.</small></span></label>
+      <label class="rule-item"><input type="checkbox" data-rule="auction"><span><b>🔨 Auktionen</b><small>Kauft niemand ein freies Grundstück, wird es versteigert. Aus: es bleibt einfach frei.</small></span></label>
+      <label class="rule-item"><input type="checkbox" data-rule="jailRent"><span><b>🚔 Miete im Knast</b><small>Auch wer im Knast sitzt, kassiert Miete. Aus: im Knast keine Mieteinnahmen.</small></span></label>
+      <label class="rule-item"><input type="checkbox" data-rule="evenBuild"><span><b>🏠 Gleichmäßig bauen</b><small>Häuser müssen gleichmäßig auf alle Straßen einer Farbe verteilt werden (offizielle Regel).</small></span></label>
+    </div>
+
     <p id="lobby-status" class="hint"></p>
     <button id="btn-start" class="btn primary hidden">Spiel starten</button>
     <button id="btn-show-rules-lobby" class="btn ghost small rules-btn" type="button">📜 Regeln ansehen</button>
@@ -98,8 +107,18 @@
   </header>
 
   <div class="game-body">
-    <div class="board-col" id="board-col">
-      <div id="board" class="board"></div>
+    <aside class="me-col" id="me-col">
+      <div class="dock-me" id="dock-me"></div>
+      <div class="dock-props-title" id="dock-props-title"></div>
+      <div class="dock-props" id="dock-props"></div>
+    </aside>
+    <div class="center-col">
+      <div class="board-col" id="board-col">
+        <div id="board" class="board"></div>
+      </div>
+      <div id="dock" class="dock">
+        <div class="dock-actions" id="dock-actions"></div>
+      </div>
     </div>
     <aside class="side-col">
       <div id="players-panel" class="players-panel"></div>
@@ -108,15 +127,6 @@
         <ul id="event-feed" class="event-feed"></ul>
       </div>
     </aside>
-  </div>
-
-  <div id="dock" class="dock">
-    <div class="dock-top">
-      <div class="dock-me" id="dock-me"></div>
-      <div class="dock-actions" id="dock-actions"></div>
-    </div>
-    <div class="dock-props-title" id="dock-props-title"></div>
-    <div class="dock-props" id="dock-props"></div>
   </div>
 </section>
 
@@ -173,7 +183,7 @@
       <p>Würfle und ziehe deine Figur. Bei einem <b>Pasch</b> würfelst du danach noch einmal – der dritte Pasch in Folge schickt dich in den <b>Panzerknacker-Knast</b>. Kommst du an <b>LOS</b> vorbei, erhältst du 200 Taler.</p>
       <h3>Felder</h3>
       <p><b>Freie Grundstücke</b> kannst du zum aufgedruckten Preis kaufen. Willst du nicht (oder kannst du nicht), wird es <b>versteigert</b> (Mindestgebot 10 Taler, alle bieten reihum oder passen). <b>Gehört das Feld jemandem</b>, zahlst du Miete. Besitzt jemand alle Straßen einer Farbe, verdoppelt sich die Miete unbebauter Straßen. Bahnhöfe und Werke werden teurer, je mehr davon jemand besitzt.</p>
-      <p><b>Tick, Trick &amp; Track</b> (Gemeinschaftsfeld) und <b>Gundels Zauberei</b> (Ereignisfeld): ziehe eine Karte und führe sie sofort aus. <b>Steuerfelder</b>: zahle den Betrag an die Bank. <b>Frei Parken</b>: nichts passiert.</p>
+      <p><b>Tick, Trick &amp; Track</b> (Gemeinschaftsfeld) und <b>Gundels Zauberei</b> (Ereignisfeld): ziehe eine Karte und führe sie sofort aus. <b>Steuerfelder</b>: zahle den Betrag an die Bank. <b>Frei Parken</b>: normalerweise passiert nichts – mit der Hausregel „Jackpot“ kassierst du alle Steuern und Strafen aus der Tischmitte. Weitere Hausregeln (doppeltes LOS-Gehalt, Auktionen, Miete im Knast, gleichmäßig bauen) stellt der Host in der Lobby ein.</p>
       <h3>Knast</h3>
       <p>Aus dem Knast kommst du, indem du zu Beginn deines Zuges 50 Taler zahlst, eine Freikarte einsetzt oder einen Pasch würfelst. Nach dem dritten erfolglosen Versuch zahlst du 50 Taler und ziehst. Miete kassieren darfst du auch im Knast.</p>
       <h3>Bauen</h3>

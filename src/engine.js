@@ -19,6 +19,13 @@ const CARDS = require('./cards.js');
 const { SQUARES, GROUPS, GROUP_POSITIONS } = BOARD;
 
 const GO_SALARY = 200;
+
+// Optionale Hausregeln (in der Lobby wählbar). Fehlende Werte = Standardregeln.
+const RULE_DEFAULTS = { freeParking: false, doubleGo: false, auction: true, jailRent: true, evenBuild: true };
+function rule(room, key) {
+  const r = room.settings && room.settings.rules;
+  return r && typeof r[key] === 'boolean' ? r[key] : RULE_DEFAULTS[key];
+}
 const JAIL_FEE = 50;
 const JAIL_POS = 10;
 const MAX_JAIL_TURNS = 3;
@@ -134,6 +141,7 @@ function initGame(room) {
     buy: null,
     auction: null,
     auctionQueue: [],
+    pot: 0,
     debts: [],
     trade: null,
     tradeSeq: 0,
@@ -216,11 +224,17 @@ function pay(room, from, to, amount, reason) {
   const hasDebt = g.debts.some((d) => d.from === from);
   if (!hasDebt && g.money[from] >= amount) {
     transfer(room, from, to, amount);
-    log(room, `${nameOf(room, from)} zahlt ${fmt(amount)}${to ? ' an ' + nameOf(room, to) : ''} (${reason}).`);
+    if (!to) toPot(room, amount);
+    log(room, `${nameOf(room, from)} zahlt ${fmt(amount)}${to ? ' an ' + nameOf(room, to) : rule(room, 'freeParking') ? ' in die Mitte' : ''} (${reason}).`);
     return;
   }
   g.debts.push({ from, to: to || null, amount, reason });
   log(room, `${nameOf(room, from)} schuldet ${to ? nameOf(room, to) : 'der Bank'} ${fmt(amount)} (${reason}) – Geld beschaffen oder aufgeben!`);
+}
+
+// Strafen und Steuern wandern bei "Frei Parken mit Jackpot" in die Tischmitte.
+function toPot(room, amount) {
+  if (rule(room, 'freeParking')) room.g.pot += amount;
 }
 
 function settleDebts(room) {
@@ -233,6 +247,7 @@ function settleDebts(room) {
       for (const d of g.debts.filter((x) => x.from === id)) {
         if (g.money[id] >= d.amount) {
           transfer(room, id, d.to, d.amount);
+          if (!d.to) toPot(room, d.amount);
           g.debts.splice(g.debts.indexOf(d), 1);
           log(room, `${nameOf(room, id)} begleicht ${fmt(d.amount)}${d.to ? ' an ' + nameOf(room, d.to) : ''} (${d.reason}).`);
           changed = true;
@@ -286,8 +301,10 @@ function movePlayer(room, id, steps, ctx) {
   g.pos[id] = to;
   g.lastMove = { id, from, to, kind: steps >= 0 ? 'steps' : 'back', seq: ++g.moveSeq };
   if (steps > 0 && raw >= 40) {
-    transfer(room, null, id, GO_SALARY);
-    log(room, `${nameOf(room, id)} zieht über LOS und erhält ${fmt(GO_SALARY)}.`);
+    const bonus = rule(room, 'doubleGo') && to === 0;
+    const sum = bonus ? GO_SALARY * 2 : GO_SALARY;
+    transfer(room, null, id, sum);
+    log(room, `${nameOf(room, id)} ${bonus ? 'landet genau auf LOS und erhält das doppelte Gehalt:' : 'zieht über LOS und erhält'} ${fmt(sum)}.`);
   }
   landOn(room, id, ctx || {});
 }
@@ -298,8 +315,10 @@ function advanceTo(room, id, pos, ctx) {
   g.pos[id] = pos;
   g.lastMove = { id, from, to: pos, kind: 'steps', seq: ++g.moveSeq };
   if (pos < from) {
-    transfer(room, null, id, GO_SALARY);
-    log(room, `${nameOf(room, id)} zieht über LOS und erhält ${fmt(GO_SALARY)}.`);
+    const bonus = rule(room, 'doubleGo') && pos === 0;
+    const sum = bonus ? GO_SALARY * 2 : GO_SALARY;
+    transfer(room, null, id, sum);
+    log(room, `${nameOf(room, id)} ${bonus ? 'landet genau auf LOS und erhält das doppelte Gehalt:' : 'zieht über LOS und erhält'} ${fmt(sum)}.`);
   }
   landOn(room, id, ctx || {});
 }
@@ -354,12 +373,20 @@ function landOn(room, id, ctx) {
       }
       if (p.owner === id) { log(room, `${nameOf(room, id)} landet auf dem eigenen Feld ${sq.name}.`); return; }
       if (p.mortgaged) { log(room, `${nameOf(room, id)} landet auf ${sq.name} – beliehen, keine Miete.`); return; }
+      if (!rule(room, 'jailRent') && g.inJail[p.owner]) { log(room, `${nameOf(room, id)} landet auf ${sq.name} – ${nameOf(room, p.owner)} sitzt im Knast, keine Miete.`); return; }
       const rent = computeRent(room, sq, ctx);
       pay(room, id, p.owner, rent, `Miete für ${sq.name}`);
       return;
     }
     case 'tax':
       pay(room, id, null, sq.amount, sq.name);
+      return;
+    case 'parking':
+      if (g.pot > 0) {
+        transfer(room, null, id, g.pot);
+        log(room, `🅿️ ${nameOf(room, id)} räumt bei Frei Parken den Jackpot ab: ${fmt(g.pot)}!`);
+        g.pot = 0;
+      }
       return;
     case 'gotojail':
       sendToJail(room, id);
@@ -497,6 +524,7 @@ function payJail(room, id) {
   if (!isCurrent(room, id) || g.phase !== 'roll' || !g.inJail[id]) return fail('Das geht gerade nicht.');
   if (g.money[id] < JAIL_FEE) return fail(`Dir fehlen ${fmt(JAIL_FEE)} für die Kaution.`);
   transfer(room, id, null, JAIL_FEE);
+  toPot(room, JAIL_FEE);
   g.inJail[id] = false;
   g.jailTurns[id] = 0;
   log(room, `${nameOf(room, id)} zahlt ${fmt(JAIL_FEE)} Kaution und ist frei.`);
@@ -546,6 +574,11 @@ function declineBuy(room, id) {
   if (g.phase !== 'buy' || !g.buy || g.buy.playerId !== id) return fail('Es gibt nichts zu versteigern.');
   const pos = g.buy.pos;
   g.buy = null;
+  if (!rule(room, 'auction')) {
+    log(room, `${nameOf(room, id)} kauft nicht – ${SQUARES[pos].name} bleibt frei.`);
+    proceed(room);
+    return ok();
+  }
   log(room, `${nameOf(room, id)} kauft nicht – ${SQUARES[pos].name} wird versteigert.`);
   startAuction(room, pos);
   proceed(room);
@@ -661,7 +694,7 @@ function buildCheck(room, id, pos) {
   if (!ownsAllInGroup(g, id, sq.group)) return 'Du brauchst alle Straßen dieser Farbe.';
   if (GROUP_POSITIONS[sq.group].some((x) => g.props[x].mortgaged)) return 'Ein Grundstück dieser Farbe ist beliehen.';
   if (p.houses >= 5) return 'Hier steht schon ein Hotel.';
-  if (p.houses > Math.min(...groupHouses(g, sq.group))) return 'Baue gleichmäßig: erst auf den anderen Straßen der Farbe.';
+  if (rule(room, 'evenBuild') && p.houses > Math.min(...groupHouses(g, sq.group))) return 'Baue gleichmäßig: erst auf den anderen Straßen der Farbe.';
   const cost = GROUPS[sq.group].houseCost;
   if (g.money[id] < cost) return `Dir fehlen ${fmt(cost)}.`;
   if (p.houses < 4 && g.housesLeft <= 0) return 'Die Bank hat keine Häuser mehr.';
@@ -691,7 +724,7 @@ function sellCheck(room, id, pos) {
   const p = g.props[pos];
   if (!sq || sq.type !== 'property' || !p || p.owner !== id) return 'Das Grundstück gehört dir nicht.';
   if (p.houses <= 0) return 'Hier stehen keine Gebäude.';
-  if (p.houses < Math.max(...groupHouses(g, sq.group))) return 'Verkaufe gleichmäßig: erst auf der Straße mit den meisten Gebäuden.';
+  if (rule(room, 'evenBuild') && p.houses < Math.max(...groupHouses(g, sq.group))) return 'Verkaufe gleichmäßig: erst auf der Straße mit den meisten Gebäuden.';
   if (p.houses === 5 && g.housesLeft < 4) return 'Die Bank hat nicht genug Häuser, um das Hotel zu ersetzen.';
   return null;
 }
@@ -900,7 +933,7 @@ function declareBankrupt(room, id) {
   } else {
     ownedBy(g, id).forEach((pos) => {
       delete g.props[pos];
-      g.auctionQueue.push(pos);
+      if (rule(room, 'auction')) g.auctionQueue.push(pos);
     });
     g.jailCards[id].forEach((d) => {
       g.decks[d].discard.push(CARDS[d].findIndex((c) => c.a.t === 'jailFree'));
@@ -911,7 +944,7 @@ function declareBankrupt(room, id) {
   g.debts = g.debts.filter((d) => d.from !== id).map((d) => (d.to === id ? Object.assign({}, d, { to: creditor }) : d));
   if (g.trade && (g.trade.from === id || g.trade.to === id)) g.trade = null;
   if (g.pendingMove && g.pendingMove.id === id) g.pendingMove = null;
-  if (g.buy && g.buy.playerId === id) { g.auctionQueue.push(g.buy.pos); g.buy = null; }
+  if (g.buy && g.buy.playerId === id) { if (rule(room, 'auction')) g.auctionQueue.push(g.buy.pos); g.buy = null; }
   g.bankrupt[id] = true;
   g.inJail[id] = false;
   g.placements.push(id);
@@ -1012,6 +1045,8 @@ function snapshot(room) {
     }),
     housesLeft: g.housesLeft,
     hotelsLeft: g.hotelsLeft,
+    pot: g.pot,
+    rules: Object.keys(RULE_DEFAULTS).reduce((o, k) => { o[k] = rule(room, k); return o; }, {}),
     buy: g.buy,
     auction: g.auction && {
       pos: g.auction.pos,
@@ -1033,7 +1068,7 @@ function snapshot(room) {
 }
 
 module.exports = {
-  GO_SALARY, JAIL_FEE, MIN_BID, HOUSES, HOTELS,
+  RULE_DEFAULTS, GO_SALARY, JAIL_FEE, MIN_BID, HOUSES, HOTELS,
   initGame, act, snapshot, pendingActors,
   // von den Bots und Tests genutzt:
   curId, alive, ownedBy, ownsAllInGroup, countOwned, groupHouses, computeRent, netWorth,

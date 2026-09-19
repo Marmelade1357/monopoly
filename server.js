@@ -117,7 +117,7 @@ function createRoom() {
     hostId: null,
     players: [], // { id, token, name, socketId, connected, isBot, tokenIdx }
     phase: 'lobby', // lobby | playing | gameover
-    settings: { startMoney: DEFAULT_START_MONEY },
+    settings: { startMoney: DEFAULT_START_MONEY, rules: Object.assign({}, engine.RULE_DEFAULTS) },
     g: null,
     logs: [],
     botTimer: null,
@@ -446,6 +446,11 @@ io.on('connection', (socket) => {
     if (socket.data.playerId !== room.hostId) return;
     const s = settings || {};
     room.settings.startMoney = clampInt(s.startMoney, 200, 100000, room.settings.startMoney);
+    if (s.rules && typeof s.rules === 'object') {
+      Object.keys(engine.RULE_DEFAULTS).forEach((k) => {
+        if (typeof s.rules[k] === 'boolean') room.settings.rules[k] = s.rules[k];
+      });
+    }
     broadcastState(room);
   });
 

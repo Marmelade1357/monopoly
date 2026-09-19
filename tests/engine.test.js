@@ -343,4 +343,62 @@ const expectFail = (res, msg) => assert(!res.ok, `${msg} hätte scheitern müsse
   assert(room.g.phase === 'over' && room.g.winner === 'p1' && room.phase === 'gameover', 'Aufgabe beendet 2er-Partie');
 }
 
+
+// 11. Hausregeln ---------------------------------------------------------------------------
+function ruleRoom(n, rules) {
+  const room = makeRoom(n);
+  room.settings.rules = rules;
+  return room;
+}
+{
+  // Frei-Parken-Jackpot: Steuer (200 auf Feld 4) landet in der Mitte, Landen auf Feld 20 kassiert.
+  const room = ruleRoom(2, { freeParking: true });
+  const g = room.g;
+  roll(room, 'p0', 1, 3); // Feld 4 Einkommensteuer
+  assert(g.money.p0 === 1300 && g.pot === 200, `Steuer im Jackpot (Pot ${g.pot})`);
+  act(room, 'p0', { type: 'endTurn' });
+  g.pos.p1 = 14;
+  roll(room, 'p1', 2, 4); // Feld 20 Frei Parken
+  assert(g.pos.p1 === 20 && g.money.p1 === 1700 && g.pot === 0, 'Jackpot kassiert');
+  // Ohne Regel: Steuer verschwindet
+  const r2 = ruleRoom(2, {});
+  roll(r2, 'p0', 1, 3);
+  assert(r2.g.pot === 0, 'Ohne Regel kein Jackpot');
+}
+{
+  // Doppeltes Gehalt beim Landen auf LOS
+  const room = ruleRoom(2, { doubleGo: true });
+  room.g.pos.p0 = 35;
+  roll(room, 'p0', 2, 3);
+  assert(room.g.pos.p0 === 0 && room.g.money.p0 === 1900, `Doppeltes LOS-Gehalt (${room.g.money.p0})`);
+  const r2 = ruleRoom(2, {});
+  r2.g.pos.p0 = 35;
+  roll(r2, 'p0', 2, 3);
+  assert(r2.g.money.p0 === 1700, 'Normales LOS-Gehalt');
+}
+{
+  // Keine Auktion: Grundstück bleibt frei
+  const room = ruleRoom(2, { auction: false });
+  roll(room, 'p0', 1, 2);
+  expectOk(act(room, 'p0', { type: 'declineBuy' }), 'Nicht kaufen');
+  assert(!room.g.auction && !room.g.props[3] && room.g.phase === 'end', 'Ohne Auktion bleibt es frei');
+}
+{
+  // Keine Miete im Knast
+  const room = ruleRoom(2, { jailRent: false });
+  own(room, 'p1', 3);
+  room.g.inJail.p1 = true;
+  roll(room, 'p0', 1, 2);
+  assert(room.g.money.p0 === 1500 && room.g.money.p1 === 1500, 'Im Knast keine Miete');
+}
+{
+  // Ungleichmäßig bauen erlaubt
+  const room = ruleRoom(2, { evenBuild: false });
+  own(room, 'p0', 1); own(room, 'p0', 3, { houses: 1 });
+  expectOk(act(room, 'p0', { type: 'build', pos: 3 }), 'Ungleichmäßig bauen');
+  const r2 = ruleRoom(2, {});
+  own(r2, 'p0', 1); own(r2, 'p0', 3, { houses: 1 });
+  expectFail(act(r2, 'p0', { type: 'build', pos: 3 }), 'Standard: gleichmäßig');
+}
+
 console.log('OK: Engine-Regeln (Miete, Knast, Auktion, Bauen, Hypothek, Handel, Pleite, Karten).');

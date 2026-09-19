@@ -246,6 +246,9 @@
   $('btn-add-bot').addEventListener('click', () => socket.emit('addBot'));
   $('btn-fill-bots').addEventListener('click', () => socket.emit('fillBots'));
   $('btn-start').addEventListener('click', () => socket.emit('startGame'));
+  document.querySelectorAll('#lobby-rules input[data-rule]').forEach((cb) => {
+    cb.addEventListener('change', () => socket.emit('setSettings', { rules: { [cb.dataset.rule]: cb.checked } }));
+  });
   $('input-money').addEventListener('change', () => socket.emit('setSettings', { startMoney: $('input-money').value }));
 
   $('btn-share-link').addEventListener('click', async () => {
@@ -295,6 +298,11 @@
     $('lobby-settings-display').classList.toggle('hidden', host);
     if (document.activeElement !== $('input-money')) $('input-money').value = s.settings.startMoney;
     $('lobby-settings-display').textContent = `Startkapital: ${fmtM(s.settings.startMoney)}`;
+    document.querySelectorAll('#lobby-rules input[data-rule]').forEach((cb) => {
+      cb.checked = !!(s.settings.rules && s.settings.rules[cb.dataset.rule]);
+      cb.disabled = !host;
+      cb.closest('.rule-item').classList.toggle('locked', !host);
+    });
     const enough = s.players.length >= s.minPlayers;
     $('btn-start').classList.toggle('hidden', !host);
     $('btn-start').disabled = !enough;
@@ -376,7 +384,7 @@
         div.appendChild(el('div', { class: 'sq-body' }, [
           el('div', { class: 'sq-icon', text: SQ_ICONS[sq.type] || '' }),
           el('div', { class: 'sq-name', text: soft(sq.name) }),
-          sub ? el('div', { class: 'sq-price', text: sub }) : null,
+          sub ? el('div', { class: 'sq-price' + (sq.type === 'parking' ? ' sq-parking' : ''), text: sub }) : null,
         ]));
       }
       div.appendChild(el('div', { class: 'tokens' }));
@@ -607,6 +615,27 @@
         el('div', {}, [el('div', { class: 'pp-name', text: pname(id) }), el('div', { class: 'pp-sub', text: gp.bankrupt ? 'pleite' : sub.join(' · ') })]),
         el('div', { class: 'pp-money', text: gp.bankrupt ? '–' : fmtM(gp.money) }),
       ]);
+      const chips = el('div', { class: 'pp-props' });
+      if (!gp.bankrupt) {
+        Object.keys(GROUPS).forEach((gr) => {
+          const ps = g.props.filter((p) => p.owner === id && SQUARES[p.pos].group === gr).sort((a, b) => a.pos - b.pos);
+          if (!ps.length) return;
+          const grp = el('div', { class: 'pp-grp' });
+          ps.forEach((p) => {
+            const chip = el('div', {
+              class: 'pp-chip' + (p.mortgaged ? ' mortgaged' : '') + (gr === 'lightblue' || gr === 'yellow' ? ' light' : ''),
+              style: `--band:${GROUPS[gr].color}`,
+              title: SQUARES[p.pos].name + (p.houses === 5 ? ' (Hotel)' : p.houses ? ` (${p.houses} Häuser)` : '') + (p.mortgaged ? ' – beliehen' : ''),
+              text: p.houses === 5 ? 'H' : p.houses ? String(p.houses) : '',
+            });
+            chip.addEventListener('click', (e) => { e.stopPropagation(); openProp(p.pos); });
+            grp.appendChild(chip);
+          });
+          chips.appendChild(grp);
+        });
+        if (!chips.children.length) chips.appendChild(el('span', { class: 'pp-none', text: 'noch kein Besitz' }));
+      }
+      row.appendChild(chips);
       row.addEventListener('click', () => openPlayer(id));
       panel.appendChild(row);
     });
@@ -691,13 +720,19 @@
       list.appendChild(el('div', { class: 'empty', text: 'Noch keine Grundstücke – kaufe oder ersteigere welche!' }));
       return;
     }
-    let lastGroup = null;
-    mine.forEach((pos) => {
-      const sq = SQUARES[pos];
-      if (lastGroup && lastGroup !== sq.group) list.appendChild(el('div', { class: 'gap' }));
-      lastGroup = sq.group;
-      const mono = sq.type === 'property' && ownsFullGroup(myId(), sq.group);
-      list.appendChild(propCard(pos, { mono, onclick: () => openProp(pos) }));
+    Object.keys(GROUPS).forEach((gr) => {
+      const inGroup = mine.filter((pos) => SQUARES[pos].group === gr);
+      if (!inGroup.length) return;
+      const total = SQUARES.filter((q) => q.group === gr).length;
+      const cards = el('div', { class: 'grp-cards' });
+      inGroup.forEach((pos) => {
+        const sq = SQUARES[pos];
+        const mono = sq.type === 'property' && ownsFullGroup(myId(), sq.group);
+        cards.appendChild(propCard(pos, { mono, onclick: () => openProp(pos) }));
+      });
+      list.appendChild(el('div', { class: 'grp-row', title: `${GROUPS[gr].name}: ${inGroup.length}/${total}` }, [
+        el('div', { class: 'grp-bar', style: `--band:${GROUPS[gr].color}` }), cards,
+      ]));
     });
   }
 
@@ -1130,6 +1165,12 @@
     statusEl.appendChild(document.createTextNode(st.t));
     if (st.sub) statusEl.appendChild(el('small', { text: st.sub }));
 
+    const pk = document.querySelector('.sq-parking');
+    if (pk) {
+      const on = g.rules && g.rules.freeParking;
+      pk.textContent = on ? `Jackpot: ${g.pot} ₮` : 'Kleine Pause';
+      pk.classList.toggle('sq-pot', !!on);
+    }
     renderPlayersPanel(s);
     renderFeed(s);
     renderDockMe(s);
