@@ -830,7 +830,13 @@
     const box = $('dock-actions');
     const waited = s.wait ? s.wait.elapsedMs + (Date.now() - stateReceivedAt) : 0;
     const canSkip = !!(s.wait && isHost() && !s.wait.ids.includes(id) && waited >= SKIP_MIN_WAIT_MS);
-    if (isBusy()) { refreshAfterIdle(); return; }
+    if (isBusy()) {
+      box.innerHTML = '';
+      box.appendChild(el('span', { class: 'msg', text: '🎲 …' }));
+      dockKey = '';
+      refreshAfterIdle();
+      return;
+    }
     const key = JSON.stringify([g.phase, g.turnId, g.buy, g.auction, g.debts.length, me && me.money, me && me.inJail, me && me.jailCards, me && me.bankrupt, g.trade && g.trade.id, canSkip, g.doubles]);
     if (key === dockKey) return;
     dockKey = key;

@@ -243,7 +243,33 @@ function publicState(room) {
   };
 }
 
+// Die Clients zeigen Würfeln, Laufen, Karten und Knast-Animation nacheinander.
+// Damit niemand (auch kein Bot) handelt, bevor die Figur angekommen ist, sperrt
+// der Server Aktionen für die geschätzte Dauer dieser Animationen.
+const ANIM_SCALE = process.env.ANIM_SCALE !== undefined ? Number(process.env.ANIM_SCALE) : 1;
+
+function updateAnimLock(room) {
+  const g = room.g;
+  if (!g || ANIM_SCALE <= 0) return;
+  if (room.animSeen === undefined) room.animSeen = { move: 0, roll: 0 };
+  const seen = room.animSeen;
+  let ms = 0;
+  if (g.rollSeq !== seen.roll) ms += 1300;
+  (g.moves || []).filter((m) => m.seq > seen.move).forEach((m) => {
+    if (g.lastCard && m.card === g.lastCard.seq && m.card !== seen.card && m.kind === 'jail') ms += 2600;
+    else if (g.lastCard && m.card === g.lastCard.seq && m.card !== seen.card) ms += 1900;
+    if (m.kind === 'jail') { ms += 2800; return; }
+    const dist = m.kind === 'back' ? (m.from - m.to + 40) % 40 : (m.to - m.from + 40) % 40;
+    ms += dist === 0 || dist > 16 ? 250 : dist * 230 + 350;
+  });
+  seen.roll = g.rollSeq;
+  seen.move = g.moves && g.moves.length ? g.moves[g.moves.length - 1].seq : seen.move;
+  seen.card = g.lastCard ? g.lastCard.seq : seen.card;
+  if (ms > 0) room.animUntil = Math.max(Date.now(), room.animUntil || 0) + (ms + 300) * ANIM_SCALE;
+}
+
 function broadcastState(room) {
+  updateAnimLock(room);
   io.to(room.code).emit('gameState', publicState(room));
   scheduleBots(room);
 }
@@ -274,7 +300,7 @@ function scheduleBots(room) {
       touchRoom(room);
     }
     broadcastState(room);
-  }, randomDelay());
+  }, Math.max(randomDelay(), (room.animUntil || 0) - Date.now()));
   if (room.botTimer.unref) room.botTimer.unref();
 }
 
@@ -460,6 +486,7 @@ io.on('connection', (socket) => {
     if (socket.data.playerId !== room.hostId) return;
     if (room.players.length < MIN_PLAYERS || room.players.length > MAX_PLAYERS) return;
     room.phase = 'playing';
+    room.animSeen = undefined; room.animUntil = 0;
     room.logs = [];
     engine.initGame(room);
     touchRoom(room);
@@ -472,6 +499,9 @@ io.on('connection', (socket) => {
     const room = roomOf(socket);
     if (!room || room.phase !== 'playing') return reply({ ok: false, error: 'Es läuft gerade kein Spiel.' });
     if (isRateLimited(`act:${socket.id}`, 60, 10 * 1000)) return reply({ ok: false, error: 'Bitte langsamer.' });
+    if (room.animUntil && Date.now() < room.animUntil && (action || {}).type !== 'resign') {
+      return reply({ ok: false, error: 'Einen Moment – die Figur ist noch unterwegs.' });
+    }
     let res;
     try {
       res = engine.act(room, socket.data.playerId, action || {});
@@ -491,6 +521,7 @@ io.on('connection', (socket) => {
     if (room.botTimer) { clearTimeout(room.botTimer); room.botTimer = null; }
     room.phase = 'lobby';
     room.g = null;
+    room.animSeen = undefined; room.animUntil = 0;
     room.logs = [];
     // Wer die Partie verlassen hat, verschwindet aus der Lobby.
     room.players = room.players.filter((p) => !p.left);
