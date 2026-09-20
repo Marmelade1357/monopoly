@@ -26,8 +26,10 @@ async function main() {
     await new Promise((r) => setTimeout(r, 200));
     const rolled = await emitAsync(a, 'act', { type: 'roll' });
     assert(rolled.ok, 'Würfeln klappt');
+    const tEarly = Date.now();
     const early = await emitAsync(a, 'act', { type: 'endTurn' });
-    assert(!early.ok && /unterwegs/.test(early.error), 'Sofortige Folgeaktion wird gesperrt: ' + JSON.stringify(early));
+    assert(Date.now() - tEarly > 500, 'Zu frühe Folgeaktion wird zurückgehalten, nicht sofort ausgeführt: ' + (Date.now() - tEarly) + ' ms');
+    assert(!/unterwegs/.test(early.error || ''), 'Zu frühe Aktion wird nicht mehr abgelehnt');
     await new Promise((r) => setTimeout(r, 6000));
     const later = await emitAsync(a, 'act', { type: 'endTurn' });
     assert(later.error === undefined || !/unterwegs/.test(later.error), 'Nach der Animation nicht mehr gesperrt');

@@ -606,20 +606,29 @@ io.on('connection', (socket) => {
     if (!room || room.phase !== 'playing') return reply({ ok: false, error: 'Es läuft gerade kein Spiel.' });
     if (!socket.data.playerId) return reply({ ok: false, error: 'Du schaust nur zu.' });
     if (isRateLimited(`act:${socket.id}`, 60, 10 * 1000)) return reply({ ok: false, error: 'Bitte langsamer.' });
-    if (room.animUntil && Date.now() < room.animUntil && (action || {}).type !== 'resign') {
-      return reply({ ok: false, error: 'Einen Moment – die Figur ist noch unterwegs.' });
+    const run = () => {
+      let res;
+      try {
+        res = engine.act(room, socket.data.playerId, action || {});
+      } catch (err) {
+        console.error('Aktionsfehler:', err);
+        res = { ok: false, error: 'Interner Fehler.' };
+      }
+      if (res.ok) { const me = findPlayer(room, socket.data.playerId); if (me) me.timeouts = 0; }
+      touchRoom(room);
+      if (res.ok) broadcastState(room);
+      reply(res);
+    };
+    // Läuft noch eine Animation, wird die Aktion kurz zurückgehalten statt abgelehnt
+    // (sonst scheitert z. B. das Würfeln, wenn man einen Moment zu früh klickt).
+    const wait = room.animUntil ? room.animUntil - Date.now() : 0;
+    if (wait > 0 && (action || {}).type !== 'resign') {
+      if (wait > 6000) return reply({ ok: false, error: 'Einen Moment – die Figur ist noch unterwegs.' });
+      const stamp = room.g;
+      setTimeout(() => { if (room.g === stamp && room.phase === 'playing') run(); else reply({ ok: false, error: 'Das Spiel hat sich geändert.' }); }, wait + 30);
+      return;
     }
-    let res;
-    try {
-      res = engine.act(room, socket.data.playerId, action || {});
-    } catch (err) {
-      console.error('Aktionsfehler:', err);
-      res = { ok: false, error: 'Interner Fehler.' };
-    }
-    if (res.ok) { const me = findPlayer(room, socket.data.playerId); if (me) me.timeouts = 0; }
-    touchRoom(room);
-    if (res.ok) broadcastState(room);
-    reply(res);
+    run();
   });
 
   socket.on('comeBack', () => {
