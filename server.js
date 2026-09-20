@@ -269,6 +269,7 @@ function publicState(room) {
     game,
     logs: room.logs.slice(-60),
     now: Date.now(),
+    spectators: room.spectators ? room.spectators.size : 0,
     wait: waitInfo(room),
     timer: room.timerInfo ? { actorId: room.timerInfo.actorId, remainingMs: Math.max(0, room.timerInfo.deadline - Date.now()), total: room.timerInfo.total } : null,
   };
@@ -455,7 +456,16 @@ io.on('connection', (socket) => {
     }
 
     if (room.phase !== 'lobby') {
-      return cb({ ok: false, error: 'Das Spiel läuft bereits. Bitte warte auf die nächste Partie.' });
+      // Läuft schon ein Spiel, kann man zuschauen.
+      room.spectators = room.spectators || new Set();
+      if ((socket.data.spectatorOf || null) !== room.code) room.spectators.add(socket.id);
+      socket.join(room.code);
+      socket.data.roomCode = room.code;
+      socket.data.playerId = null;
+      socket.data.spectatorOf = room.code;
+      cb({ ok: true, code: room.code, playerId: null, token: null, spectator: true });
+      broadcastState(room);
+      return;
     }
     if (room.players.length >= MAX_PLAYERS) {
       return cb({ ok: false, error: `Der Raum ist bereits voll (max. ${MAX_PLAYERS} Spieler).` });
@@ -479,7 +489,13 @@ io.on('connection', (socket) => {
     const room = roomOf(socket);
     if (!room) return;
     const player = findPlayer(room, socket.data.playerId);
-    if (!player) return;
+    if (!player) {
+      if (room.spectators) room.spectators.delete(socket.id);
+      socket.leave(room.code);
+      socket.data.roomCode = null; socket.data.spectatorOf = null;
+      broadcastState(room);
+      return;
+    }
 
     if (room.phase === 'lobby') {
       room.players = room.players.filter((p) => p.id !== player.id);
@@ -588,6 +604,7 @@ io.on('connection', (socket) => {
     const reply = typeof cb === 'function' ? cb : () => {};
     const room = roomOf(socket);
     if (!room || room.phase !== 'playing') return reply({ ok: false, error: 'Es läuft gerade kein Spiel.' });
+    if (!socket.data.playerId) return reply({ ok: false, error: 'Du schaust nur zu.' });
     if (isRateLimited(`act:${socket.id}`, 60, 10 * 1000)) return reply({ ok: false, error: 'Bitte langsamer.' });
     if (room.animUntil && Date.now() < room.animUntil && (action || {}).type !== 'resign') {
       return reply({ ok: false, error: 'Einen Moment – die Figur ist noch unterwegs.' });
@@ -653,7 +670,10 @@ io.on('connection', (socket) => {
     const room = roomOf(socket);
     if (!room) return;
     const player = findPlayer(room, socket.data.playerId);
-    if (!player) return;
+    if (!player) {
+      if (room.spectators && room.spectators.delete(socket.id)) broadcastState(room);
+      return;
+    }
     // Bei einem Reconnect übernimmt ein neuer Socket bereits player.socketId,
     // bevor das 'disconnect'-Event des alten Sockets eintrifft (Reihenfolge nicht
     // garantiert). Ohne diese Prüfung würde das verspätete Event die Person

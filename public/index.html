@@ -111,9 +111,11 @@
       <span id="timer-badge" class="timer-badge hidden"></span>
     </div>
     <div class="game-header-right">
+      <button id="btn-panels" class="btn ghost small" type="button" title="Seitenleisten ein-/ausblenden (3D)">◧<span class="lbl"> Leisten</span></button>
       <button id="btn-view3d" class="btn ghost small" type="button" title="2D / 3D umschalten">🧊<span class="lbl"> 3D</span></button>
       <button id="btn-show-log" class="btn ghost small" type="button" title="Verlauf">🗒️<span class="lbl"> Verlauf</span></button>
       <button id="btn-toggle-sound" class="btn ghost small" type="button">🔊</button>
+      <input id="vol" class="vol" type="range" min="0" max="100" step="5" value="80" title="Lautstärke" aria-label="Lautstärke">
       <button id="btn-show-rules" class="btn ghost small" type="button">📜</button>
       <button id="btn-leave-game" class="btn ghost small" type="button" title="Verlassen">🚪<span class="lbl"> Verlassen</span></button>
     </div>
@@ -128,7 +130,8 @@
     <div class="center-col">
       <div class="board-col" id="board-col">
         <div id="board" class="board"></div>
-        <div id="view3d-tools" class="view3d-tools hidden"><button id="btn-cam3d" class="reset3d" type="button" title="Kameramodus: Sanft / Fest / Kino">🎥 Sanft</button><button id="btn-top3d" class="reset3d" type="button" title="Draufsicht: alle Beschriftungen gleich gut lesbar">⬆️ Von oben</button><button id="btn-reset3d" class="reset3d" type="button" title="Ansicht zurücksetzen">🎯 Ansicht</button></div>
+        <div id="hud3d" class="hud3d"></div>
+        <div id="view3d-tools" class="view3d-tools hidden"><button id="btn-cam3d" class="reset3d" type="button" title="Kameramodus: Sanft / Fest / Kino">🎥 Sanft</button><button id="btn-top3d" class="reset3d" type="button" title="Draufsicht: alle Beschriftungen gleich gut lesbar">⬆️ Von oben</button><button id="btn-rotl3d" class="reset3d" type="button" title="90° nach links drehen">⟲</button><button id="btn-rotr3d" class="reset3d" type="button" title="90° nach rechts drehen">⟳</button><button id="btn-light3d" class="reset3d" type="button" title="Tag / Abend">🌙</button><button id="btn-reset3d" class="reset3d" type="button" title="Ansicht zurücksetzen">🎯 Ansicht</button></div>
       </div>
       <div id="dock" class="dock">
         <div class="timer-bar hidden" id="timer-bar"><i></i></div>

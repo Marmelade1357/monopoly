@@ -6,7 +6,7 @@ const { startServer, stopServer, connectClient, emitAsync, assert } = require('.
 const PORT = 3457;
 
 async function main() {
-  const proc = await startServer(PORT, { BOT_DELAY_MIN_MS: '0', BOT_DELAY_MAX_MS: '5' });
+  const proc = await startServer(PORT, { BOT_DELAY_MIN_MS: '0', BOT_DELAY_MAX_MS: '5', ANIM_SCALE: '0' });
   const url = `http://localhost:${PORT}`;
   try {
     const a = await connectClient(url);
@@ -96,11 +96,15 @@ async function main() {
     // Unbekannte Aktion / Spielfremde Person
     const c = await connectClient(url);
     const late = await emitAsync(c, 'joinRoom', { code: created.code, name: 'Spätzünder' });
-    assert(!late.ok, 'Beitritt mitten im Spiel nicht möglich');
-    const noRoom = await emitAsync(c, 'act', { type: 'roll' });
+    assert(late.ok && late.spectator && !late.playerId, 'Beitritt mitten im Spiel nur als Zuschauer');
+    const spAct = await emitAsync(c, 'act', { type: 'roll' });
+    assert(!spAct.ok, 'Zuschauer kann nicht spielen');
+    c.close();
+    const c2 = await connectClient(url);
+    const noRoom = await emitAsync(c2, 'act', { type: 'roll' });
     assert(!noRoom.ok, 'Aktion ohne Raum wird abgelehnt');
 
-    [a, b, c].forEach((s) => s.close());
+    [a, b, c2].forEach((s) => s.close());
     console.log(`OK: Socket-Ablauf (${state.game.turnCount} Züge gespielt).`);
   } finally {
     await stopServer(proc);

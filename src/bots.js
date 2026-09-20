@@ -97,13 +97,14 @@ function decideTrade(room, id) {
   return { type: 'cancelTrade' };
 }
 
-// Bots schlagen (nur anderen Bots) Tauschgeschäfte vor, mit denen sie ein Farbset
+// Bots schlagen anderen Bots (und, seltener, anwesenden Menschen) Tauschgeschäfte vor, mit denen sie ein Farbset
 // vervollständigen - sonst würden reine Bot-Runden nie zu Monopolen kommen.
 // Pro Zug höchstens ein Angebot; nach jedem Angebot wird das nächste großzügiger.
 function tradeIdea(room, id) {
   const g = room.g;
   if (g.trade || (g.botTradeTurn && g.botTradeTurn[id] === g.turnCount)) return null;
   const botIds = new Set(room.players.filter((p) => p.isBot).map((p) => p.id));
+  const humanIds = new Set(room.players.filter((p) => !p.isBot && p.connected && !p.left && !p.afk).map((p) => p.id));
   const groups = Object.keys(GROUP_POSITIONS).filter((k) => k !== 'station' && k !== 'utility');
   const options = [];
   for (const group of groups) {
@@ -113,20 +114,28 @@ function tradeIdea(room, id) {
     if (!mine.length || mine.length === positions.length) continue;
     positions.filter((pos) => !mine.includes(pos)).forEach((pos) => {
       const p = g.props[pos];
-      if (!p || !botIds.has(p.owner) || g.bankrupt[p.owner] || p.owner === id) return;
+      if (!p || g.bankrupt[p.owner] || p.owner === id) return;
+      if (!botIds.has(p.owner)) {
+        // Menschen bekommen höchstens alle 10 Züge ein Angebot von demselben Bot.
+        if (!humanIds.has(p.owner)) return;
+        const last = (g.botHumanTrade || {})[id + ':' + p.owner];
+        if (last !== undefined && g.turnCount - last < 10) return;
+      }
       // Nur von Bots kaufen, die mit diesem Feld selbst keinen Satz aufbauen.
       const theirs = positions.filter((x) => g.props[x] && g.props[x].owner === p.owner).length;
       if (theirs > 1 && positions.length - mine.length > 1) return;
-      options.push({ pos, owner: p.owner, mine: mine.length });
+      options.push({ pos, owner: p.owner, mine: mine.length, human: !botIds.has(p.owner) });
     });
   }
   options.sort((a, b) => b.mine - a.mine);
   for (const o of options) {
     g.botTradeFactor = g.botTradeFactor || {};
     const factor = g.botTradeFactor[id] || persona(room, id).tradeStart;
-    const offer = Math.ceil((SQUARES[o.pos].price * factor) / 10) * 10;
+    const offer = Math.ceil((SQUARES[o.pos].price * (o.human ? Math.max(factor, 1.7) : factor)) / 10) * 10;
     if (g.money[id] - offer < 100) continue;
+    const toHuman = !botIds.has(o.owner);
     g.botTradeTurn = g.botTradeTurn || {};
+    if (toHuman) { g.botHumanTrade = g.botHumanTrade || {}; g.botHumanTrade[id + ':' + o.owner] = g.turnCount; }
     g.botTradeTurn[id] = g.turnCount;
     g.botTradeFactor[id] = Math.min(6, factor + 0.35);
     return { type: 'proposeTrade', to: o.owner, give: { cash: offer, props: [], cards: 0 }, get: { cash: 0, props: [o.pos], cards: 0 } };

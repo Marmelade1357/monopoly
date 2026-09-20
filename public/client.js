@@ -34,8 +34,10 @@
   // ---------------------------------------------------------------------
 
   let audioCtx = null;
+  let masterVol = 0.8;
+  { const v = Number(safeGet('mono_vol')); if (safeGet('mono_vol') !== null && Number.isFinite(v)) masterVol = Math.max(0, Math.min(1, v)); }
   function playTone(freq, duration, delay, volume, type) {
-    if (!soundOn) return;
+    if (!soundOn || masterVol <= 0) return;
     try {
       if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       const t0 = audioCtx.currentTime + (delay || 0);
@@ -44,7 +46,7 @@
       osc.frequency.value = freq;
       osc.type = type || 'sine';
       gain.gain.setValueAtTime(0, t0);
-      gain.gain.linearRampToValueAtTime(volume || 0.15, t0 + 0.01);
+      gain.gain.linearRampToValueAtTime((volume || 0.15) * masterVol * 1.25, t0 + 0.01);
       gain.gain.exponentialRampToValueAtTime(0.0001, t0 + duration);
       osc.connect(gain).connect(audioCtx.destination);
       osc.start(t0);
@@ -66,8 +68,13 @@
   function hide(e) { e.classList.add('hidden'); }
   function fmtM(n) { return Number(n).toLocaleString('de-DE') + ' ₮'; }
   // Weiche Trennstellen für lange Feldnamen (sonst werden sie auf dem Brett abgeschnitten).
+  const HYPH = {};
+  ['Küken|weg', 'Feder|straße', 'Gänse|markt', 'Enten|teich', 'Bruch|bude', 'Schrott|platz', 'Glücks|wiese', 'Schnatter|straße', 'Erfinder|allee', 'Düsen|triebs', 'Kraft|werk',
+    'Fiesel|schweif', 'Rathaus|platz', 'Bürger|meister|allee', 'Enten|markt', 'Quack|straße', 'Gold|gräber|straße', 'Klon|dike', 'Boule|vard', 'Banken|viertel', 'Geld|speicher',
+    'Einkommen|steuer', 'Panzer|knacker', 'Wasser|turm', 'Taler|platz', 'Kauf|haus', 'Schwanen', 'Erpel|ring', 'Gänse', 'Passage'].forEach((h) => { HYPH[h.replace(/\|/g, '')] = h.replace(/\|/g, '\u00AD'); });
+  // Weiche Trennstellen für lange Feldnamen (sonst werden sie auf dem Brett abgeschnitten).
   function soft(name) {
-    return name.replace(/([a-zäöüß]{3,})(meister|gräber|straße|steuer|viertel|platz|allee|wiese|teich|werk)/g, '$1\u00AD$2');
+    return name.replace(/[A-Za-zÄÖÜäöüß]+/g, (w) => HYPH[w] || w);
   }
 
   function el(tag, opts, children) {
@@ -185,8 +192,9 @@
     safeSet('monopoly_name', name);
     socket.emit('createRoom', { name }, (res) => {
       if (!res.ok) return toast(res.error || 'Fehler beim Erstellen.');
-      session = { code: res.code, playerId: res.playerId, token: res.token, name };
+      session = { code: res.code, playerId: res.playerId, token: res.token, name, spectator: !!res.spectator };
       saveSession();
+      if (res.spectator) toast('Das Spiel läuft schon – du schaust zu.');
     });
   });
 
@@ -213,6 +221,7 @@
   attachConfirmClick($('btn-leave-lobby'), leaveToHome);
   attachConfirmClick($('btn-leave-game'), leaveToHome);
 
+  { const vs = $('vol'); if (vs) { vs.value = Math.round(masterVol * 100); vs.addEventListener('input', () => { masterVol = Number(vs.value) / 100; safeSet('mono_vol', String(masterVol)); if (masterVol > 0 && !soundOn) { soundOn = true; safeSet(SOUND_KEY, 'on'); updateSoundButton(); } }); vs.addEventListener('change', () => playTone(660, 0.12, 0, 0.15, 'triangle')); } }
   function updateSoundButton() { $('btn-toggle-sound').textContent = soundOn ? '🔊' : '🔇'; }
   updateSoundButton();
   $('btn-toggle-sound').addEventListener('click', () => {
@@ -400,6 +409,8 @@
         ]));
       }
       div.appendChild(el('div', { class: 'tokens' }));
+      div.addEventListener('mousemove', (e) => showTip3d(sq.pos, e.clientX, e.clientY));
+      div.addEventListener('mouseleave', () => showTip3d(null));
       div.addEventListener('click', () => {
         if (sq.type === 'property' || sq.type === 'station' || sq.type === 'utility') openProp(sq.pos);
       });
@@ -442,6 +453,7 @@
     const b = $('btn-cam3d');
     if (b) b.textContent = CAMS.find((x) => x[0] === camMode)[1];
     if (b3) b3.setCameraMode(camMode);
+    if (b3 && applyLight3d) applyLight3d();
   }
   function want3d() {
     const saved = safeGet('mono_view');
@@ -532,8 +544,15 @@
     let top = false;
     $('btn-top3d').addEventListener('click', () => { if (!b3 || !b3.setTopDown) return; top = !b3.isTopDown(); b3.setTopDown(top); $('btn-top3d').textContent = top ? '🧭 Schräg' : '⬆️ Von oben'; });
     $('btn-cam3d').addEventListener('click', () => { camMode = CAMS[(CAMS.findIndex((x) => x[0] === camMode) + 1) % CAMS.length][0]; safeSet('mono_cam', camMode); applyCam(); });
+    let light = safeGet('mono_light') === 'evening' ? 'evening' : 'day';
+    const applyLight = () => { $('btn-light3d').textContent = light === 'evening' ? '☀️' : '🌙'; if (b3 && b3.setLightMode) b3.setLightMode(light); };
+    $('btn-light3d').addEventListener('click', () => { light = light === 'evening' ? 'day' : 'evening'; safeSet('mono_light', light); applyLight(); });
+    $('btn-rotl3d').addEventListener('click', () => { if (b3 && b3.rotateView) b3.rotateView(-1); });
+    $('btn-rotr3d').addEventListener('click', () => { if (b3 && b3.rotateView) b3.rotateView(1); });
+    applyLight3d = applyLight;
     applyCam();
   }
+  let applyLight3d = null;
 
   // --- Figuren & Bewegungs-Animation ---
 
@@ -690,6 +709,13 @@
       div.classList.toggle('owned', !!p);
       div.classList.toggle('mortgaged', !!(p && p.mortgaged));
       if (p) div.style.setProperty('--own', pcolor(p.owner)); else div.style.removeProperty('--own');
+      let ob = div.querySelector('.own-badge');
+      if (p) {
+        if (!ob) { ob = el('span', { class: 'own-badge' }); div.appendChild(ob); }
+        const em = (pinfo(p.owner) || {}).emoji || '';
+        if (ob.textContent !== em) ob.textContent = em;
+        ob.title = pname(p.owner);
+      } else if (ob) ob.remove();
       if (sq.type === 'property') {
         const band = div.querySelector('.band');
         const key = p ? p.houses + (p.mortgaged ? 'm' : '') : '';
@@ -976,6 +1002,27 @@
     return { minRaise, opts };
   }
 
+  // Baumöglichkeiten des eigenen Zugs: (Häuser/Hotel auf Sets, die man bereits komplett besitzt)
+  function buildOptions(g) {
+    const id = myId();
+    if (!id || !g.players[id] || g.players[id].bankrupt) return [];
+    return g.props.filter((p) => p.owner === id && SQUARES[p.pos].type === 'property' && !p.errBuild && !p.mortgaged).map((p) => {
+      const sq = SQUARES[p.pos];
+      const rent = sq.rent || [];
+      return { pos: p.pos, houses: p.houses, cost: GROUPS[sq.group].houseCost, from: rent[p.houses], to: rent[p.houses + 1] };
+    }).sort((a, b) => (b.to - b.from) / b.cost - (a.to - a.from) / a.cost || a.pos - b.pos);
+  }
+  let endAsked = null;
+  function endTurnAsk(g) {
+    const opts = buildOptions(g);
+    if (opts.length && endAsked !== g.turnCount) {
+      endAsked = g.turnCount;
+      toast(`Du könntest noch bauen (${opts.map((o) => SQUARES[o.pos].name).slice(0, 3).join(', ')}${opts.length > 3 ? ' …' : ''}). Tippe nochmal auf „Zug beenden“, wenn du fertig bist.`);
+      return;
+    }
+    act({ type: 'endTurn' });
+  }
+
   function renderDockActions(s) {
     const g = s.game;
     const id = myId();
@@ -990,7 +1037,7 @@
       refreshAfterIdle();
       return;
     }
-    const key = JSON.stringify([g.phase, g.turnId, g.buy, g.auction, g.debts.length, me && me.money, me && me.inJail, me && me.jailCards, me && me.bankrupt, g.trade && g.trade.id, canSkip, g.doubles, !!(pinfo(id) && pinfo(id).afk)]);
+    const key = JSON.stringify([g.phase, g.turnId, g.buy, g.auction, g.debts.length, me && me.money, me && me.inJail, me && me.jailCards, me && me.bankrupt, g.trade && g.trade.id, canSkip, g.doubles, !!(pinfo(id) && pinfo(id).afk), g.turnId === id ? buildOptions(g).map((x) => x.pos + ':' + x.houses).join(',') : '']);
     if (key === dockKey) return;
     dockKey = key;
     box.innerHTML = '';
@@ -1015,6 +1062,7 @@
       return b;
     };
     const mineTurn = g.turnId === id;
+    const bopts = mineTurn ? buildOptions(g) : [];
 
     if (g.phase === 'roll' && mineTurn) {
       if (me.inJail) {
@@ -1053,15 +1101,25 @@
         const total = mine.reduce((sum, d) => sum + d.amount, 0);
         const to = mine[0].to ? pname(mine[0].to) : 'die Bank';
         msg(`💸 Du schuldest <b>${fmtM(total)}</b> (${to}). Verkaufe Gebäude oder beleihe Grundstücke – oder gib auf.`);
-        btn('🏳️ Aufgeben', 'danger', () => act({ type: 'resign' }));
+        const rb = btn('🏳️ Aufgeben', 'danger', () => {
+          if (rb.dataset.ask) { act({ type: 'resign' }); return; }
+          rb.dataset.ask = '1'; rb.textContent = 'Wirklich aufgeben?';
+          setTimeout(() => { rb.dataset.ask = ''; rb.textContent = '🏳️ Aufgeben'; }, 3500);
+        });
       } else {
         msg(`Warte auf ${g.debts.map((d) => pname(d.from)).filter((v, i, a) => a.indexOf(v) === i).join(', ')} – Schulden begleichen …`);
       }
     } else if (g.phase === 'end' && mineTurn) {
       msg('Zug gespielt – du kannst noch bauen, handeln oder Hypotheken verwalten.');
-      btn('✅ Zug beenden', 'good', () => act({ type: 'endTurn' }));
+      btn('✅ Zug beenden', 'good', () => endTurnAsk(g));
     } else {
       msg(`Warte auf <b>${pname(g.turnId)}</b> …`);
+    }
+
+    if (bopts.length && (g.phase === 'roll' || g.phase === 'end')) {
+      const o = bopts[0];
+      const b = btn(`🏠 Bauen möglich: ${SQUARES[o.pos].name} (−${o.cost} ₮${o.to ? `, Miete ${o.from} → ${o.to} ₮` : ''})${bopts.length > 1 ? ` +${bopts.length - 1}` : ''}`, 'ghost small build-hint', () => openProp(o.pos));
+      b.title = 'Baumöglichkeiten: ' + bopts.map((x) => SQUARES[x.pos].name).join(', ');
     }
 
     // Immer verfügbar
@@ -1771,7 +1829,7 @@
     $('game-code').textContent = s.code;
     const mine = g.turnId === myId() && g.phase !== 'over';
     const badge = $('turn-badge');
-    badge.textContent = g.phase === 'over' ? 'Spiel beendet' : mine ? 'Du bist dran!' : `${pname(g.turnId)} ist am Zug`;
+    badge.textContent = g.phase === 'over' ? 'Spiel beendet' : mine ? 'Du bist dran!' : `${session && session.spectator ? '👁 ' : ''}${pname(g.turnId)} ist am Zug`;
     badge.classList.toggle('mine', mine);
 
     updateDice(g);
@@ -1795,6 +1853,7 @@
     handleEvents(g);
     handleBust(g);
     trackMoney(g);
+    renderHud(g);
     renderPlayersPanel(s);
     renderFeed(s);
     turnSplash(g);
@@ -1839,7 +1898,7 @@
 
   socket.on('connect', () => {
     const saved = loadSession();
-    if (saved && saved.code && saved.token) {
+    if (saved && saved.code && (saved.token || saved.spectator)) {
       session = saved;
       socket.emit('joinRoom', { code: saved.code, name: saved.name, token: saved.token }, (res) => {
         if (!res.ok) {
@@ -1849,6 +1908,7 @@
         } else {
           session.playerId = res.playerId;
           session.token = res.token;
+          session.spectator = !!res.spectator;
           saveSession();
         }
       });
@@ -1862,6 +1922,49 @@
     if (!session) return; // Zustand eines fremden Raums ignorieren
     render();
   });
+
+  // --- Tastatur: Leertaste würfelt, Enter beendet den Zug, Esc schließt Fenster ---
+  document.addEventListener('keydown', (e) => {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const tag = (e.target && e.target.tagName) || '';
+    if (/INPUT|TEXTAREA|SELECT/.test(tag)) return;
+    if ($('screen-game').classList.contains('hidden')) return;
+    if (e.key === 'Escape') {
+      if (document.querySelector('.modal:not(.hidden)')) { closeAllModals(); e.preventDefault(); }
+      else if (b3 && b3.dismissCard) b3.dismissCard();
+      return;
+    }
+    if (document.querySelector('.modal:not(.hidden)')) return;
+    const pick = (re) => Array.from($('dock-actions').querySelectorAll('button')).find((b) => !b.disabled && re.test(b.textContent));
+    if (e.key === ' ' || e.code === 'Space') {
+      const b = pick(/würfeln|Pasch versuchen/i);
+      if (b) { e.preventDefault(); b.click(); }
+    } else if (e.key === 'Enter') {
+      const b = pick(/Zug beenden/);
+      if (b) { e.preventDefault(); b.click(); }
+    }
+  });
+
+  // --- Seitenleisten in 3D ein-/ausblenden, dazu ein kleines Überblick-HUD im Brett ---
+  function applyPanels() {
+    const off = safeGet('mono_panels') === 'off';
+    $('screen-game').classList.toggle('panels-off', off);
+    $('btn-panels').classList.toggle('active', off);
+  }
+  $('btn-panels').addEventListener('click', () => { safeSet('mono_panels', safeGet('mono_panels') === 'off' ? 'on' : 'off'); applyPanels(); });
+  applyPanels();
+  function renderHud(g) {
+    const hud = $('hud3d');
+    if (!hud || !mode3d || safeGet('mono_panels') !== 'off') return;
+    hud.innerHTML = '';
+    g.order.forEach((pid) => {
+      const p = pinfo(pid); const gp = g.players[pid];
+      if (!p || !gp) return;
+      hud.appendChild(el('button', { type: 'button', class: 'hud-chip' + (g.turnId === pid ? ' turn' : '') + (gp.bankrupt ? ' bust' : '') + (pid === myId() ? ' me' : ''), style: `--pc:${p.color}`, title: 'Details', onclick: () => openPlayer(pid) }, [
+        el('i', { text: p.emoji }), el('b', { text: gp.bankrupt ? 'pleite' : fmtM(gp.money) }), el('small', { text: `${g.props.filter((q) => q.owner === pid).length} 🏠` }),
+      ]));
+    });
+  }
 
   init3d();
 

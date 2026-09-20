@@ -39,6 +39,11 @@ let camMode = 'soft';          // 'soft' (sanft nachführen) | 'fixed' | 'cinema
 let diceUntil = 0;
 let cardObj = null;
 let elevDeg = 65;
+let lights = null;
+let lightMode = 'day';
+let potGroup = null, potCount = -1;
+let drawn = { chance: 0, community: 0 };
+let puffT = 0;
 let camHold = null;
 let camF = { x: 0, z: 0, zoom: 1 };
 
@@ -318,6 +323,8 @@ function buildBoard() {
     deck.position.set(x, TOP + 0.13, z);
     deck.rotation.y = i === 0 ? -yaw : -yaw + Math.PI * 0 ;
     deck.castShadow = true; deck.receiveShadow = true;
+    const band = new THREE.Mesh(new THREE.BoxGeometry(2.24, 0.05, 1.49), new THREE.MeshStandardMaterial({ color: 0xd8b25a, metalness: 0.6, roughness: 0.35 }));
+    band.position.y = 0.03; deck.add(band);
     deck.userData.base = deck.position.y;
     deck.userData.phase = i * 2;
     scene.add(deck);
@@ -609,8 +616,10 @@ function makeToken(p) {
   const lid = new THREE.Mesh(new THREE.TorusGeometry(0.42, 0.02, 6, 24), cm); lid.rotation.x = Math.PI / 2; lid.position.y = 1.0; cage.add(lid);
   cage.visible = false;
   group.add(cage);
+  const arrow = new THREE.Mesh(new THREE.ConeGeometry(0.17, 0.34, 4), new THREE.MeshStandardMaterial({ color: p.color, emissive: p.color, emissiveIntensity: 0.6, roughness: 0.35 }));
+  arrow.rotation.x = Math.PI; arrow.visible = false; group.add(arrow);
   group.traverse((o) => { o.userData.tid = p.id; });
-  return { id: p.id, group, pawn, sprite, ring, cage, mat, pos: null, target: null, from: new THREE.Vector3(), to: new THREE.Vector3(), tw: null, bob: Math.random() * 6, fxCage: false };
+  return { id: p.id, group, pawn, sprite, ring, cage, arrow, mat, pos: null, target: null, from: new THREE.Vector3(), to: new THREE.Vector3(), tw: null, bob: Math.random() * 6, fxCage: false };
 }
 
 function slotFor(pos, idx, n, jailed) {
@@ -746,6 +755,17 @@ export function rollDice(a, b, ms) {
 }
 
 // ---------------------------------------------------------------- Effekte
+
+const dustGeo = new THREE.CircleGeometry(0.13, 12);
+function dust(tk) {
+  if (dustCount > 40) return;
+  dustCount++;
+  const m = new THREE.Mesh(dustGeo, new THREE.MeshBasicMaterial({ color: new THREE.Color(tk.mat.color).lerp(new THREE.Color(0xffffff), 0.6), transparent: true, opacity: 0.55, depthWrite: false }));
+  m.rotation.x = -Math.PI / 2; m.position.set(tk.group.position.x, TOP + 0.03, tk.group.position.z);
+  scene.add(m);
+  tweens.push({ t: 0, dur: 0.6, fn: (k) => { const sc = 1 + k * 1.6; m.scale.set(sc, sc, sc); m.material.opacity = 0.55 * (1 - k); }, done: () => { scene.remove(m); m.material.dispose(); dustCount--; } });
+}
+let dustCount = 0;
 
 function tokenPoint(id, y) {
   const tk = tokens[id];
@@ -919,8 +939,19 @@ export function dismissCard() {
   tweens.push({ t: 0, dur: 0.35, fn: (k) => { co.mesh.position.y = from.y + k * 0.5; co.mesh.scale.setScalar(Math.max(0.01, sc * (1 - k))); }, done: () => { scene.remove(co.mesh); co.mesh.geometry.dispose(); if (cardObj === co) cardObj = null; } });
 }
 
+function updateDeckHeights() {
+  ['community', 'chance'].forEach((k, i) => {
+    const d = decks[i]; if (!d) return;
+    const sy = 0.5 + 0.5 * (1 - (drawn[k] % 16) / 16);
+    d.scale.y = sy;
+    d.userData.base = TOP + 0.13 * sy;
+  });
+}
+
 export function showCard(c) {
   if (!renderer || !visible) return false;
+  drawn[c.deck === 'chance' ? 'chance' : 'community']++;
+  updateDeckHeights();
   if (cardObj) { scene.remove(cardObj.mesh); cardObj = null; }
   const front = new THREE.MeshBasicMaterial({ map: cardFace(c), toneMapped: false, transparent: true });
   const back = new THREE.MeshBasicMaterial({ map: cardBack(c), toneMapped: false, transparent: true });
@@ -945,6 +976,33 @@ export function showCard(c) {
   return true;
 }
 
+// ---------------------------------------------------------------- Licht (Tag / Abend)
+
+const LIGHTS = {
+  day: { hemiC: 0xfff4e0, hemiG: 0x7a5a3a, hemiI: 0.55, sunC: 0xffe0b4, sunI: 2.5, sunP: [-7, 14, 9], fillC: 0x9db8ff, fillI: 0.5, lampI: 0, env: 0.32, exp: 1.0 },
+  evening: { hemiC: 0xffc890, hemiG: 0x3a2a4a, hemiI: 0.4, sunC: 0xff9a55, sunI: 1.7, sunP: [-12, 6.5, 9], fillC: 0x6e86ff, fillI: 0.75, lampI: 26, env: 0.2, exp: 0.95 },
+};
+function applyLight(mode, instant) {
+  lightMode = mode === 'evening' ? 'evening' : 'day';
+  if (!lights) return;
+  const to = LIGHTS[lightMode];
+  const from = lights.cur || to;
+  const col = (c) => new THREE.Color(c);
+  const set = (k) => {
+    lights.hemi.color.copy(col(from.hemiC).lerp(col(to.hemiC), k)); lights.hemi.groundColor.copy(col(from.hemiG).lerp(col(to.hemiG), k)); lights.hemi.intensity = from.hemiI + (to.hemiI - from.hemiI) * k;
+    lights.sun.color.copy(col(from.sunC).lerp(col(to.sunC), k)); lights.sun.intensity = from.sunI + (to.sunI - from.sunI) * k;
+    lights.sun.position.set(...from.sunP.map((v, i) => v + (to.sunP[i] - v) * k));
+    lights.fill.color.copy(col(from.fillC).lerp(col(to.fillC), k)); lights.fill.intensity = from.fillI + (to.fillI - from.fillI) * k;
+    lights.lamp.intensity = from.lampI + (to.lampI - from.lampI) * k;
+    if (scene) scene.environmentIntensity = from.env + (to.env - from.env) * k;
+    if (renderer) renderer.toneMappingExposure = from.exp + (to.exp - from.exp) * k;
+  };
+  lights.cur = to;
+  if (instant) { set(1); return; }
+  tweens.push({ t: 0, dur: 0.9, fn: set, done: () => set(1) });
+}
+export function setLightMode(m) { applyLight(m, false); }
+
 // ---------------------------------------------------------------- Kamera & Schleife
 
 function fitDistance() {
@@ -965,6 +1023,19 @@ function fitDistance() {
   }
   fitDist = hi;
   return { dir, dist: hi };
+}
+
+export function rotateView(dir) {
+  if (!camera || !controls) return;
+  const off0 = camera.position.clone().sub(controls.target);
+  const r = Math.hypot(off0.x, off0.z), y = off0.y;
+  const az0 = Math.atan2(off0.x, off0.z), az1 = az0 + (dir > 0 ? 1 : -1) * Math.PI / 2;
+  viewTweenUntil = performance.now() + 900;
+  tweens.push({ t: 0, dur: 0.7, fn: (k) => {
+    const e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
+    const az = az0 + (az1 - az0) * e;
+    camera.position.set(controls.target.x + Math.sin(az) * r, controls.target.y + y, controls.target.z + Math.cos(az) * r);
+  }, done: () => { viewTweenUntil = 0; } });
 }
 
 let viewTweenUntil = 0;
@@ -1036,6 +1107,10 @@ function tick() {
     }
     const active = tk.id === activeId;
     tk.ring.visible = active;
+    tk.arrow.visible = active && !tk.tw;
+    if (active) { tk.arrow.position.y = 1.85 + Math.sin(pulse * 3.2) * 0.1; tk.arrow.rotation.y += dt * 2.2; }
+    // Staubwölkchen beim Laufen
+    if (tk.tw) { tk.puff = (tk.puff || 0) + dt; if (tk.puff > 0.07) { tk.puff = 0; dust(tk); } }
     if (active) { tk.ring.material.opacity = 0.55 + Math.sin(pulse * 5) * 0.35; const s = 1 + Math.sin(pulse * 5) * 0.08; tk.ring.scale.set(s, s, s); if (!tk.tw) tk.pawn.position.y = Math.abs(Math.sin(pulse * 3)) * 0.06; }
     else tk.pawn.position.y = 0;
     tk.sprite.position.x += ((tk.spriteDX || 0) - tk.sprite.position.x) * 0.15;
@@ -1112,7 +1187,8 @@ export function init(opts) {
     pm.dispose();
   } catch (e) { /* ohne Umgebungslicht weiter */ }
   camera = new THREE.PerspectiveCamera(38, 1, 0.5, 200);
-  scene.add(new THREE.HemisphereLight(0xfff4e0, 0x7a5a3a, 0.55));
+  const hemi = new THREE.HemisphereLight(0xfff4e0, 0x7a5a3a, 0.55);
+  scene.add(hemi);
   const sun = new THREE.DirectionalLight(0xffe0b4, 2.5);
   sun.position.set(-7, 14, 9);
   sun.castShadow = true;
@@ -1124,6 +1200,9 @@ export function init(opts) {
   const fill = new THREE.DirectionalLight(0x9db8ff, 0.5);
   fill.position.set(9, 7, -8);
   scene.add(fill);
+  const lamp = new THREE.PointLight(0xffc27a, 0, 30, 1.6); lamp.position.set(0, 5, 0); scene.add(lamp);
+  lights = { hemi, sun, fill, lamp, cur: null };
+  applyLight(lightMode, true);
   const table = new THREE.Mesh(new THREE.PlaneGeometry(90, 90), new THREE.MeshStandardMaterial({ map: woodTexture(), roughness: 0.75, metalness: 0 }));
   table.rotation.x = -Math.PI / 2; table.position.y = -0.361; table.receiveShadow = true;
   scene.add(table);
@@ -1145,7 +1224,7 @@ export function init(opts) {
 
   // Klicks: Feld oder Figur
   let down = null;
-  canvas.addEventListener('pointerdown', (e) => { down = { x: e.clientX, y: e.clientY }; });
+  canvas.addEventListener('pointerdown', (e) => { down = { x: e.clientX, y: e.clientY }; controls.rotateSpeed = e.pointerType === 'touch' ? 1.25 : 0.7; });
   canvas.addEventListener('pointerup', (e) => {
     if (!down) return;
     const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y);
@@ -1244,8 +1323,32 @@ export function update(view) {
     potTile.topMat.map = tex(tileCanvas(sq, potTile.rect, { sub: potText, hot: view.freeParking }));
     potTile.topMat.needsUpdate = true;
   }
+  updateJackpot(view);
   layoutTokens(view, !firstUpdate);
   firstUpdate = false;
+}
+
+function updateJackpot(view) {
+  if (!potTile) return;
+  const n = view.freeParking ? Math.min(45, Math.ceil((view.pot || 0) / 30)) : 0;
+  if (n === potCount) return;
+  const grew = n > potCount && potCount >= 0;
+  potCount = n;
+  if (potGroup) { potTile.group.remove(potGroup); potGroup = null; }
+  if (!n) return;
+  potGroup = new THREE.Group();
+  const spots = [[-0.44, -0.36], [0.44, -0.36], [-0.28, 0.02], [0.28, 0.02], [0, -0.26]];
+  for (let i = 0; i < n; i++) {
+    const sp = spots[i % spots.length], layer = Math.floor(i / spots.length);
+    const coin = new THREE.Mesh(coinGeo, coinMat);
+    coin.scale.setScalar(0.85);
+    coin.position.set(sp[0] + ((i * 7) % 5 - 2) * 0.006, TOP + 0.02 + layer * 0.03, sp[1] + ((i * 3) % 5 - 2) * 0.006);
+    coin.rotation.y = (i * 1.3) % 6;
+    coin.castShadow = true;
+    potGroup.add(coin);
+  }
+  potTile.group.add(potGroup);
+  if (grew) popIn(potGroup);
 }
 
 export function dispose() {
