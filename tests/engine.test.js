@@ -436,4 +436,65 @@ function ruleRoom(n, rules) {
   assert(g.money.p0 === 1550 && g.money.p1 === 1450, 'Geld für die Freikarte fließt');
 }
 
+// Monopol-Banner, Häuserknappheit, Höhepunkte -----------------------------------
+{
+  const room = makeRoom(2);
+  const g = room.g;
+  own(room, 'p0', 1);
+  g.pos.p0 = 0; g.pos.p1 = 0;
+  own(room, 'p1', 3);
+  // p0 kauft Ententeich per Handel gegen Geld -> Monopol Braun
+  g.turnIdx = 0; g.phase = 'roll'; g.next = 'roll';
+  expectOk(act(room, 'p0', { type: 'proposeTrade', to: 'p1', give: { cash: 100 }, get: { props: [3] } }), 'Handel vorschlagen');
+  expectOk(act(room, 'p1', { type: 'acceptTrade' }), 'Handel annehmen');
+  assert(g.events.some((e) => e.kind === 'monopoly' && e.id === 'p0' && e.group === 'brown'), 'Monopol-Ereignis');
+  assert(g.hl.monopolies.length === 1 && g.hl.monopolies[0].id === 'p0', 'Monopol in den Höhepunkten');
+  // Häuserknappheit
+  g.housesLeft = 5; g.money.p0 = 5000;
+  expectOk(act(room, 'p0', { type: 'build', pos: 1 }), 'Haus bauen');
+  assert(g.housesLeft === 4 && g.events.some((e) => e.kind === 'shortage' && e.left === 4), 'Knappheits-Banner bei 4 Häusern');
+  // größte Miete und Pleite werden festgehalten
+  g.pos.p1 = 39; g.phase = 'roll'; g.next = 'roll'; g.turnIdx = 1;
+  roll(room, 'p1', 1, 1);
+  assert(g.hl.bigRent && g.hl.bigRent.owner === 'p0', 'Größte Miete gemerkt');
+}
+
+// Bots: Ablehnungsgrund, Vorschlag, Schwierigkeitsgrad -------------------------------
+{
+  const B = require('../src/bots.js');
+  const room = makeRoom(2);
+  room.players[1].isBot = true;
+  const g = room.g;
+  own(room, 'p1', 1); own(room, 'p1', 3); // p1 (Bot) hat das ganze Braun-Set
+  g.turnIdx = 0; g.phase = 'roll'; g.next = 'roll';
+  expectOk(act(room, 'p0', { type: 'proposeTrade', to: 'p1', give: { cash: 100 }, get: { props: [] } }), 'leeres Angebot mit Geld');
+  const d = B.decide(room, { id: 'p1', kind: 'trade' });
+  assert(d.type === 'acceptTrade', 'Geschenk wird angenommen');
+  act(room, 'p1', { type: 'cancelTrade' });
+  expectOk(act(room, 'p0', { type: 'proposeTrade', to: 'p1', give: { cash: 100 }, get: { props: [3] } }), 'Angebot für Set-Teil');
+  const d2 = B.decide(room, { id: 'p1', kind: 'trade' });
+  assert(d2.type === 'cancelTrade' && /Farbset/.test(d2.reason), 'Ablehnung mit Grund: ' + JSON.stringify(d2));
+  expectOk(act(room, 'p1', d2), 'Bot lehnt ab');
+  assert(g.tradeReply && g.tradeReply.text === d2.reason && g.tradeReply.to === 'p0', 'Antwort steht im Zustand');
+  assert(room.logs.some((l) => /Farbset/.test(l.text)), 'Grund im Protokoll');
+
+  // Vorschlag: p0 besitzt Gänsemarkt+Federstraße, Bot das Kükenweg
+  const r2 = makeRoom(2);
+  r2.players[1].isBot = true;
+  own(r2, 'p0', 6); own(r2, 'p0', 8); own(r2, 'p1', 9);
+  const sug = B.suggestTrade(r2, 'p0', 'p1');
+  assert(sug.ok && sug.get.props.includes(9) && sug.give.cash > 0, 'Vorschlag: Kükenweg kaufen ' + JSON.stringify(sug));
+  assert(!E.tradeError(r2, { from: 'p0', to: 'p1', give: sug.give, get: sug.get }), 'Vorschlag ist gültig');
+  expectOk(act(r2, 'p0', { type: 'proposeTrade', to: 'p1', give: sug.give, get: sug.get }), 'Vorschlag senden');
+  assert(B.decide(r2, { id: 'p1', kind: 'trade' }).type === 'acceptTrade', 'Bot nimmt seinen fairen Vorschlag an');
+
+  // Schwierigkeitsgrad: gemeine Bots verlangen mehr
+  const easy = makeRoom(2), hard = makeRoom(2);
+  [easy, hard].forEach((r) => { r.players[1].isBot = true; own(r, 'p1', 9); r.g.turnIdx = 0; });
+  easy.settings.botLevel = 'easy'; hard.settings.botLevel = 'hard';
+  const cashNeeded = (r) => { const sg = B.suggestTrade(r, 'p0', 'p1'); return sg.ok ? sg.give.cash : Infinity; };
+  own(easy, 'p0', 6); own(hard, 'p0', 6);
+  assert(cashNeeded(easy) < cashNeeded(hard), `leichte Bots verlangen weniger als gemeine (${cashNeeded(easy)} < ${cashNeeded(hard)})`);
+}
+
 console.log('OK: Engine-Regeln (Miete, Knast, Auktion, Bauen, Hypothek, Handel, Pleite, Karten).');

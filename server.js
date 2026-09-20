@@ -9,7 +9,7 @@ const express = require('express');
 const { Server } = require('socket.io');
 
 const engine = require('./src/engine.js');
-const { botAct, autoAct } = require('./src/bots.js');
+const { botAct, autoAct, suggestTrade } = require('./src/bots.js');
 
 const app = express();
 const server = http.createServer(app);
@@ -143,7 +143,7 @@ function createRoom() {
     hostId: null,
     players: [], // { id, token, name, socketId, connected, isBot, tokenIdx }
     phase: 'lobby', // lobby | playing | gameover
-    settings: { startMoney: DEFAULT_START_MONEY, rules: Object.assign({}, engine.RULE_DEFAULTS), turnTimer: 0, limit: 'none', speed: 'normal' },
+    settings: { startMoney: DEFAULT_START_MONEY, rules: Object.assign({}, engine.RULE_DEFAULTS), turnTimer: 0, limit: 'none', speed: 'normal', botLevel: 'normal' },
     g: null,
     logs: [],
     botTimer: null,
@@ -577,6 +577,7 @@ io.on('connection', (socket) => {
     if (s.turnTimer !== undefined) room.settings.turnTimer = [0, 30, 45, 60, 90, 120].includes(Number(s.turnTimer)) ? Number(s.turnTimer) : 0;
     if (s.limit !== undefined) room.settings.limit = /^(none|m(30|45|60|90|120)|r(15|20|30|40|60))$/.test(String(s.limit)) ? String(s.limit) : 'none';
     if (s.preset === 'short') { room.settings.limit = 'm45'; room.settings.speed = 'fast'; room.settings.turnTimer = 45; room.settings.startMoney = 1500; room.settings.rules.freeParking = false; room.settings.rules.doubleGo = true; }
+    if (s.botLevel !== undefined) room.settings.botLevel = ['easy', 'normal', 'hard'].includes(s.botLevel) ? s.botLevel : 'normal';
     if (s.speed !== undefined) room.settings.speed = s.speed === 'fast' ? 'fast' : 'normal';
     if (s.rules && typeof s.rules === 'object') {
       Object.keys(engine.RULE_DEFAULTS).forEach((k) => {
@@ -629,6 +630,18 @@ io.on('connection', (socket) => {
       return;
     }
     run();
+  });
+
+  // Vorschlag für ein faires Handelsangebot (ändert nichts am Spiel).
+  socket.on('suggestTrade', (data, cb) => {
+    const reply = typeof cb === 'function' ? cb : () => {};
+    const room = roomOf(socket);
+    if (!room || room.phase !== 'playing' || !room.g) return reply({ ok: false, error: 'Es läuft gerade kein Spiel.' });
+    if (!socket.data.playerId) return reply({ ok: false, error: 'Du schaust nur zu.' });
+    if (isRateLimited(`sug:${socket.id}`, 20, 10 * 1000)) return reply({ ok: false, error: 'Bitte langsamer.' });
+    const to = data && data.to;
+    if (!room.players.some((p) => p.id === to)) return reply({ ok: false, error: 'Unbekannte Person.' });
+    try { reply(suggestTrade(room, socket.data.playerId, to)); } catch (err) { console.error(err); reply({ ok: false, error: 'Interner Fehler.' }); }
   });
 
   socket.on('comeBack', () => {

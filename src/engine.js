@@ -163,6 +163,10 @@ function initGame(room) {
     stats: {},
     events: [],
     eventSeq: 0,
+    hl: { bigRent: null, monopolies: [], busts: [] },
+    groupOwner: {},
+    shortWarn: false, shortZero: false,
+    tradeReply: null, tradeReplySeq: 0,
     lastAuction: null,
     limitReached: false,
     forcedDice: null,
@@ -432,6 +436,7 @@ function landOn(room, id, ctx) {
       const rent = computeRent(room, sq, ctx);
       g.stats[id].rentOut += rent; g.stats[p.owner].rentIn += rent;
       recordEvent(g, { kind: 'rent', payer: id, owner: p.owner, pos: sq.pos, amount: rent });
+      if (!g.hl.bigRent || rent > g.hl.bigRent.amount) g.hl.bigRent = { payer: id, owner: p.owner, pos: sq.pos, amount: rent, round: g.round };
       pay(room, id, p.owner, rent, `Miete für ${sq.name}`);
       return;
     }
@@ -908,13 +913,16 @@ function proposeTrade(room, id, a) {
   return ok();
 }
 
-function cancelTrade(room, id) {
+function cancelTrade(room, id, a) {
   const g = room.g;
   if (!g.trade || (g.trade.from !== id && g.trade.to !== id)) return fail('Kein Angebot vorhanden.');
   const declined = g.trade.to === id;
+  const me = room.players.find((x) => x.id === id);
+  const reason = declined && me && me.isBot && a && typeof a.reason === 'string' ? a.reason.trim().slice(0, 90) : '';
   log(room, declined
-    ? `${nameOf(room, id)} lehnt das Angebot von ${nameOf(room, g.trade.from)} ab.`
+    ? `${nameOf(room, id)} lehnt das Angebot von ${nameOf(room, g.trade.from)} ab${reason ? ': „' + reason + '“' : '.'}`
     : `${nameOf(room, id)} zieht das Angebot zurück.`);
+  if (reason) g.tradeReply = { seq: ++g.tradeReplySeq, by: id, to: g.trade.from, text: reason };
   g.trade = null;
   return ok();
 }
@@ -1010,6 +1018,7 @@ function declareBankrupt(room, id) {
   if (g.pendingMove && g.pendingMove.id === id) g.pendingMove = null;
   if (g.buy && g.buy.playerId === id) { if (rule(room, 'auction')) g.auctionQueue.push(g.buy.pos); g.buy = null; }
   g.bankrupt[id] = true;
+  g.hl.busts.push({ id, round: g.round, creditor });
   g.inJail[id] = false;
   g.placements.push(id);
   proceed(room);
@@ -1021,6 +1030,42 @@ function declareBankrupt(room, id) {
 // ---------------------------------------------------------------------------
 
 function act(room, id, a) {
+  const res = actInner(room, id, a);
+  if (res && res.ok && room.g) { try { afterAct(room); } catch (e) { console.error('afterAct:', e); } }
+  return res;
+}
+
+// Nach jeder Aktion: neue Monopole und Häuserknappheit erkennen (für Banner und Zusammenfassung).
+function afterAct(room) {
+  const g = room.g;
+  Object.keys(GROUP_POSITIONS).forEach((group) => {
+    if (group === 'station' || group === 'utility') return;
+    const ps = GROUP_POSITIONS[group];
+    const first = g.props[ps[0]];
+    const owner = first && !g.bankrupt[first.owner] && ps.every((pos) => g.props[pos] && g.props[pos].owner === first.owner) ? first.owner : null;
+    const prev = g.groupOwner[group] || null;
+    g.groupOwner[group] = owner;
+    if (owner && owner !== prev) {
+      g.hl.monopolies.push({ id: owner, group, round: g.round });
+      recordEvent(g, { kind: 'monopoly', id: owner, group, pos: ps[Math.floor(ps.length / 2)] });
+      log(room, `🌟 ${nameOf(room, owner)} besitzt jetzt die ganze Farbgruppe ${GROUPS[group].name} – Monopol!`);
+    }
+  });
+  if (g.housesLeft >= 10) { g.shortWarn = false; g.shortZero = false; }
+  if (g.housesLeft < HOUSES) {
+    if (g.housesLeft === 0 && !g.shortZero) {
+      g.shortZero = true; g.shortWarn = true;
+      recordEvent(g, { kind: 'shortage', left: 0 });
+      log(room, '🏚️ Die Bank hat keine Häuser mehr!');
+    } else if (g.housesLeft > 0 && g.housesLeft <= 4 && !g.shortWarn) {
+      g.shortWarn = true;
+      recordEvent(g, { kind: 'shortage', left: g.housesLeft });
+      log(room, `🏚️ Häuserknappheit: Nur noch ${g.housesLeft} Häuser in der Bank.`);
+    }
+  }
+}
+
+function actInner(room, id, a) {
   const g = room.g;
   if (!g || g.phase === 'over') return fail('Es läuft gerade kein Spiel.');
   if (g.bankrupt[id]) return fail('Du bist bereits ausgeschieden.');
@@ -1039,7 +1084,7 @@ function act(room, id, a) {
     case 'unmortgage': return unmortgage(room, id, Number(a.pos));
     case 'proposeTrade': return proposeTrade(room, id, a);
     case 'acceptTrade': return acceptTrade(room, id);
-    case 'cancelTrade': return cancelTrade(room, id);
+    case 'cancelTrade': return cancelTrade(room, id, a);
     case 'resign': return declareBankrupt(room, id);
     default: return fail('Unbekannte Aktion.');
   }
@@ -1131,6 +1176,8 @@ function snapshot(room) {
     winner: g.winner,
     round: g.round,
     stats: g.stats,
+    hl: g.hl,
+    tradeReply: g.tradeReply,
     events: g.events,
     limit: (function () { const l = limitOf(room); return l ? { mode: l.mode, value: l.value, endsAt: l.mode === 'minutes' ? g.startedAt + l.value * 60000 : null } : null; })(),
     limitReached: g.limitReached,

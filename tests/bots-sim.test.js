@@ -19,7 +19,7 @@ function mulberry32(a) {
 function makeRoom(n, seed, startMoney) {
   const players = [];
   for (let i = 0; i < n; i++) players.push({ id: 'p' + i, name: 'Bot' + i, isBot: true, connected: true, persona: ['careful', 'bold', 'trader', 'balanced'][i % 4] });
-  return { players, settings: { startMoney: startMoney || 1500, rules: process.env.SIM_RULES ? JSON.parse(process.env.SIM_RULES) : undefined }, logs: [], rng: mulberry32(seed), phase: 'playing' };
+  return { players, settings: { startMoney: startMoney || 1500, botLevel: ['easy', 'normal', 'hard'][seed % 3], rules: process.env.SIM_RULES ? JSON.parse(process.env.SIM_RULES) : undefined }, logs: [], rng: mulberry32(seed), phase: 'playing' };
 }
 
 function checkInvariants(room) {

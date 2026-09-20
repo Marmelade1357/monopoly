@@ -256,7 +256,7 @@
   $('btn-add-bot').addEventListener('click', () => socket.emit('addBot'));
   $('btn-fill-bots').addEventListener('click', () => socket.emit('fillBots'));
   $('btn-start').addEventListener('click', () => socket.emit('startGame'));
-  [['set-timer', 'turnTimer'], ['set-limit', 'limit'], ['set-speed', 'speed']].forEach(([id, key]) => {
+  [['set-timer', 'turnTimer'], ['set-limit', 'limit'], ['set-speed', 'speed'], ['set-botlevel', 'botLevel']].forEach(([id, key]) => {
     $(id).addEventListener('change', () => socket.emit('setSettings', { [key]: $(id).value }));
   });
   document.querySelectorAll('#lobby-rules input[data-rule]').forEach((cb) => {
@@ -314,7 +314,7 @@
     $('lobby-settings-display').classList.toggle('hidden', host);
     if (document.activeElement !== $('input-money')) $('input-money').value = s.settings.startMoney;
     $('lobby-settings-display').textContent = `Startkapital: ${fmtM(s.settings.startMoney)}`;
-    [['set-timer', 'turnTimer'], ['set-limit', 'limit'], ['set-speed', 'speed']].forEach(([id, key]) => {
+    [['set-timer', 'turnTimer'], ['set-limit', 'limit'], ['set-speed', 'speed'], ['set-botlevel', 'botLevel']].forEach(([id, key]) => {
       const sel = $(id);
       if (document.activeElement !== sel) sel.value = String(s.settings[key] === undefined ? '' : s.settings[key]);
       sel.disabled = !host;
@@ -1426,10 +1426,25 @@
     sel.addEventListener('change', () => {
       draft.to = sel.value;
       draft.get = { cash: 0, props: new Set(), cards: 0 };
+      draft.note = '';
       renderTradeModal();
     });
     body.appendChild(el('label', { class: 'hint', style: 'display:block;margin:0 0 4px', text: 'Handeln mit' }));
-    body.appendChild(sel);
+    const sugBtn = el('button', { class: 'btn ghost small', type: 'button', text: '💡 Vorschlag' });
+    sugBtn.title = 'Ein faires Angebot für diese Person vorschlagen lassen';
+    sugBtn.addEventListener('click', () => {
+      sugBtn.disabled = true;
+      socket.emit('suggestTrade', { to: draft.to }, (res) => {
+        if (!draft) return;
+        if (!res || !res.ok) { draft.note = (res && res.error) || 'Kein Vorschlag möglich.'; renderTradeModal(); return; }
+        draft.give = { cash: res.give.cash, props: new Set(res.give.props), cards: res.give.cards || 0 };
+        draft.get = { cash: res.get.cash, props: new Set(res.get.props), cards: res.get.cards || 0 };
+        draft.note = '💡 ' + res.note;
+        renderTradeModal();
+      });
+    });
+    body.appendChild(el('div', { class: 'trade-partner-row' }, [sel, sugBtn]));
+    if (draft.note) body.appendChild(el('p', { class: 'hint suggestion', text: draft.note }));
 
     body.appendChild(tradeTips());
     body.appendChild(el('div', { class: 'trade-cols' }, [
@@ -1518,8 +1533,20 @@
     award('rentOut', '💸 Größter Zahler');
     award('built', '🏗️ Bauherr');
     award('bought', '🏠 Sammler');
+    const hl = g.hl || {};
+    const hlItems = [];
+    if (hl.bigRent) hlItems.push(['💥', `Größte Miete: ${pname(hl.bigRent.payer)} zahlte ${fmtM(hl.bigRent.amount)} an ${pname(hl.bigRent.owner)} (${SQUARES[hl.bigRent.pos].name}, Runde ${hl.bigRent.round})`]);
+    if (best.rentIn) hlItems.push(['💰', `Meiste Einnahmen: ${ids.filter((id) => st[id] && st[id].rentIn === best.rentIn).map(pname).join(', ')} mit ${fmtM(best.rentIn)} Miete`]);
+    if (hl.monopolies && hl.monopolies.length) hlItems.push(['🌟', 'Monopole: ' + hl.monopolies.map((m) => `${pname(m.id)} – ${GROUPS[m.group].name} (Runde ${m.round})`).join(' · ')]);
+    if (hl.busts && hl.busts.length) hlItems.push(['🪦', 'Pleiten: ' + hl.busts.map((b) => `${pname(b.id)} (Runde ${b.round}${b.creditor ? ', an ' + pname(b.creditor) : ', an die Bank'})`).join(' · ')]);
+    else hlItems.push(['🛡️', 'Niemand ist pleitegegangen.']);
+    if (best.built) hlItems.push(['🏗️', `Meiste Gebäude gebaut: ${ids.filter((id) => st[id] && st[id].built === best.built).map(pname).join(', ')} (${best.built})`]);
+    if (g.round) hlItems.push(['🔄', `Gespielte Runden: ${g.round}`]);
+    const hlBox = el('ul', { class: 'highlights' }, hlItems.map(([i, t]) => el('li', {}, [el('i', { text: i }), el('span', { text: t })])));
     if (g.limitReached) awards.appendChild(el('span', { class: 'award', text: g.limit && g.limit.mode === 'minutes' ? '⏰ Zeit abgelaufen' : '🏁 Rundenlimit erreicht' }));
     wrap.appendChild(awards);
+    wrap.appendChild(el('div', { class: 'hl-title', text: 'Höhepunkte' }));
+    wrap.appendChild(hlBox);
     const head = el('tr', {}, [el('th', { text: 'Spieler' })].concat(cols.map(([l]) => el('th', { text: l }))).concat([el('th', { text: 'Vermögen' })]));
     const rows = (g.ranking || ids).map((id) => {
       const x = st[id] || { rentIn: 0, rentOut: 0, bought: 0, built: 0 };
@@ -1786,7 +1813,29 @@
   const eventQueue = [];
   let eventRunning = false;
 
+  function showBanner(e) {
+    const board = $('board');
+    let icon, title, sub, cls = '';
+    if (e.kind === 'monopoly') {
+      const gr = GROUPS[e.group];
+      icon = '🌟'; title = `${pname(e.id)}: Monopol!`; sub = `Die ganze Farbgruppe ${gr.name} gehört jetzt ${e.id === myId() ? 'dir' : pname(e.id)}`;
+      cls = 'monopoly';
+      [523, 659, 784, 1047].forEach((f, i) => playTone(f, 0.16, i * 0.12, 0.18, 'triangle'));
+      if (b3 && mode3d) { b3.focusTile(e.pos, T(2400)); b3.confettiAt(e.pos, false); }
+    } else {
+      icon = '🏚️'; title = e.left === 0 ? 'Keine Häuser mehr in der Bank!' : `Häuserknappheit: nur noch ${e.left} ${e.left === 1 ? 'Haus' : 'Häuser'}!`;
+      sub = 'Wer jetzt baut, hat einen Vorteil – oder Hotels ersetzen Häuser.'; cls = 'shortage';
+      [196, 165, 147].forEach((f, i) => playTone(f, 0.2, i * 0.15, 0.16, 'square'));
+    }
+    const n = el('div', { class: 'splash banner ' + cls, style: 'position:absolute;left:50%;top:26%;pointer-events:none;z-index:29' }, [
+      el('span', { class: 'bn-icon', text: icon }), el('div', { class: 'bn-text' }, [el('b', { text: title }), el('small', { text: sub })])]);
+    if (e.kind === 'monopoly' && GROUPS[e.group]) n.style.setProperty('--bn', GROUPS[e.group].color);
+    board.appendChild(n);
+    setTimeout(() => n.remove(), T(2500));
+  }
+
   function showEvent(e) {
+    if (e.kind === 'monopoly' || e.kind === 'shortage') { showBanner(e); return; }
     if (b3 && mode3d) b3.moneyFx({ from: e.payer, to: e.kind === 'rent' ? e.owner : null, amount: e.amount });
     const board = $('board');
     let children;
@@ -1817,6 +1866,15 @@
     ev.filter((e) => e.seq > eventSeen).forEach((e) => eventQueue.push(e));
     eventSeen = Math.max(eventSeen, max);
     if (!eventRunning && eventQueue.length) runEvents();
+  }
+
+  let tradeReplySeen = null;
+  function handleTradeReply(g) {
+    const r = g.tradeReply;
+    if (tradeReplySeen === null) { tradeReplySeen = r ? r.seq : 0; return; }
+    if (!r || r.seq <= tradeReplySeen) return;
+    tradeReplySeen = r.seq;
+    if (r.to === myId()) toast(`🤖 ${pname(r.by)}: „${r.text}“`);
   }
 
   let prevBankrupt = null;
@@ -1882,6 +1940,7 @@
     renderAuction(g);
     handleEvents(g);
     handleBust(g);
+    handleTradeReply(g);
     trackMoney(g);
     renderHud(g);
     renderPlayersPanel(s);

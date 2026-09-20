@@ -45,6 +45,7 @@ let potGroup = null, potCount = -1;
 let drawn = { chance: 0, community: 0 };
 let puffT = 0;
 let camHold = null;
+let focusUntil = 0;
 let camF = { x: 0, z: 0, zoom: 1 };
 
 const SIZES = [CORNER, 1, 1, 1, 1, 1, 1, 1, 1, 1, CORNER];
@@ -1062,6 +1063,13 @@ function fitDistance() {
   return { dir, dist: hi };
 }
 
+export function focusTile(pos, ms) {
+  if (!tileMeshes[pos] || camMode === 'fixed') return;
+  const r = tileMeshes[pos].rect, now = performance.now();
+  camHold = { until: now + ms, want: { x: r.cx * 0.6, z: r.cz * 0.6, zoom: 0.66 } };
+  focusUntil = now + ms + 1600;
+}
+
 export function rotateView(dir) {
   if (!camera || !controls) return;
   const off0 = camera.position.clone().sub(controls.target);
@@ -1200,7 +1208,7 @@ function tick() {
     camF.x += (want.x - camF.x) * a; camF.z += (want.z - camF.z) * a; camF.zoom += (want.zoom - camF.zoom) * a;
     const d = new THREE.Vector3(camF.x, 0, camF.z).sub(controls.target);
     controls.target.add(d); camera.position.add(d);
-    if (cin) {
+    if (cin || now < focusUntil) {
       const off = camera.position.clone().sub(controls.target);
       off.setLength(fitDist * camF.zoom);
       camera.position.copy(controls.target).add(off);

@@ -14,9 +14,22 @@ const PERSONAS = {
   bold:     { buyReserve: 20,  buildReserve: 60,  bidFactor: 1.1,  tradeStart: 1.5, tradeAccept: 1.1 },
   trader:   { buyReserve: 120, buildReserve: 200, bidFactor: 0.85, tradeStart: 1.25, tradeAccept: 1.0 },
 };
+// Schwierigkeitsgrad (Lobby-Einstellung): verändert die Charaktere der Bots.
+const LEVELS = {
+  easy:   { buyReserve: (v) => v + 200, buildReserve: (v) => v + 300, bidFactor: (v) => v * 0.65, tradeStart: (v) => v * 1.3, tradeAccept: (v) => v * 0.8, humanCooldown: 14 },
+  normal: { humanCooldown: 10 },
+  hard:   { buyReserve: (v) => v * 0.6, buildReserve: (v) => v * 0.7, bidFactor: (v) => v * 1.15, tradeStart: (v) => v * 0.85, tradeAccept: (v) => v * 1.12, humanCooldown: 5 },
+};
+function levelOf(room) {
+  return LEVELS[(room.settings && room.settings.botLevel) || 'normal'] || LEVELS.normal;
+}
 function persona(room, id) {
   const p = room.players.find((x) => x.id === id);
-  return PERSONAS[(p && p.persona) || 'balanced'] || PERSONAS.balanced;
+  const base = PERSONAS[(p && p.persona) || 'balanced'] || PERSONAS.balanced;
+  const lv = levelOf(room);
+  const out = Object.assign({}, base);
+  ['buyReserve', 'buildReserve', 'bidFactor', 'tradeStart', 'tradeAccept'].forEach((k) => { if (lv[k]) out[k] = lv[k](base[k]); });
+  return out;
 }
 
 function rnd(room) { return (room.rng || Math.random)(); }
@@ -84,17 +97,78 @@ function decideDebt(room, id) {
   return { type: 'resign' };
 }
 
+// Wie bewertet `id` das Angebot t? receives = was er bekommt, gives = was er hergibt.
+function evalTrade(room, id, t) {
+  const g = room.g;
+  const mine = t.to === id ? t.give : t.get;
+  const theirs = t.to === id ? t.get : t.give;
+  const receives = mine.cash + mine.props.reduce((s, p) => s + valueOf(g, id, p) * (g.props[p].mortgaged ? 0.6 : 1), 0) + mine.cards * 50;
+  let breaks = null, needs = null;
+  const gives = theirs.cash + theirs.props.reduce((s, p) => {
+    const sq = SQUARES[p];
+    const breaksSet = sq.group && E.ownsAllInGroup(g, id, sq.group) && sq.group !== 'utility' && sq.group !== 'station';
+    if (breaksSet && !breaks) breaks = p;
+    if (!breaksSet && sq.group && sq.group !== 'utility' && sq.group !== 'station' && E.countOwned(g, id, sq.group) >= Math.ceil(GROUP_POSITIONS[sq.group].length / 2) && !needs) needs = p;
+    return s + sq.price * (breaksSet ? 3 : 1.15);
+  }, 0) + theirs.cards * 60;
+  return { receives, gives, breaks, needs };
+}
+
 function decideTrade(room, id) {
   const g = room.g;
   const t = g.trade;
-  const receives = t.give.cash + t.give.props.reduce((s, p) => s + valueOf(g, id, p) * (g.props[p].mortgaged ? 0.6 : 1), 0) + t.give.cards * 50;
-  const gives = t.get.cash + t.get.props.reduce((s, p) => {
-    const sq = SQUARES[p];
-    const breaksSet = sq.group && E.ownsAllInGroup(g, id, sq.group) && sq.group !== 'utility' && sq.group !== 'station';
-    return s + sq.price * (breaksSet ? 3 : 1.15);
-  }, 0) + t.get.cards * 60;
+  const { receives, gives, breaks, needs } = evalTrade(room, id, t);
   if (receives > 0 && receives >= gives * persona(room, id).tradeAccept) return { type: 'acceptTrade' };
-  return { type: 'cancelTrade' };
+  let reason;
+  if (breaks !== null) reason = 'Dafür müsste ich mein Farbset aufgeben.';
+  else if (needs !== null) reason = 'Das Grundstück brauche ich selbst.';
+  else if (receives <= 0) reason = 'Für mich springt dabei nichts raus.';
+  else if (t.get.cash > g.money[id] * 0.6) reason = 'Dafür habe ich gerade zu wenig Geld.';
+  else if (receives < gives * 0.6) reason = 'Das ist mir deutlich zu wenig.';
+  else reason = 'Ein bisschen mehr müsste es schon sein.';
+  return { type: 'cancelTrade', reason };
+}
+
+// Fairer Vorschlag für `from` an `to` (für den Knopf "Vorschlag" im Handelsfenster).
+// Gibt { ok, give, get, note } oder { ok: false, error } zurück; ändert nichts am Spiel.
+function suggestTrade(room, from, to) {
+  const g = room.g;
+  if (!g || from === to || g.bankrupt[from] || g.bankrupt[to]) return { ok: false, error: 'Kein Vorschlag möglich.' };
+  const toBot = !!(room.players.find((p) => p.id === to) || {}).isBot;
+  const need = toBot ? persona(room, to).tradeAccept * 1.03 : 1.15;
+  const fair = (t) => { const e = evalTrade(room, to, t); return e.receives > 0 && e.receives >= e.gives * need; };
+  const side = (cash, props) => ({ cash, props: props || [], cards: 0 });
+  const tradeable = (pos) => SQUARES[pos].type === 'property' || SQUARES[pos].type === 'station' || SQUARES[pos].type === 'utility';
+  const mineIn = (pos) => (SQUARES[pos].group ? E.countOwned(g, from, SQUARES[pos].group) : 0);
+  const wants = E.ownedBy(g, to).filter(tradeable).filter((pos) => mineIn(pos) > 0)
+    .sort((a, b) => (completesSet(g, from, b) - completesSet(g, from, a)) || (mineIn(b) - mineIn(a)) || (SQUARES[b].price - SQUARES[a].price))
+    .slice(0, 6);
+  if (!wants.length) return { ok: false, error: 'Bei dieser Person gibt es nichts, das zu deinen Grundstücken passt.' };
+  const myMax = g.money[from] - 50;
+  const mk = (give, get) => ({ id: 0, from, to, give, get });
+  for (const pos of wants) {
+    const price = SQUARES[pos].price;
+    // 1. Kaufen: kleinstes faires Bargeldangebot
+    for (let cash = Math.ceil((price * 0.7) / 10) * 10; cash <= Math.min(myMax, price * 4); cash += 10) {
+      const t = mk(side(cash), side(0, [pos]));
+      if (fair(t) && !E.tradeError(room, t)) {
+        return { ok: true, give: t.give, get: t.get, note: `${SQUARES[pos].name} ${completesSet(g, from, pos) ? 'vervollständigt dein Farbset' : 'passt zu deinem Besitz'} – für ${cash} ₮ sollte ${E.nameOf(room, to)} zustimmen.` };
+      }
+    }
+  }
+  // 2. Tauschen: eigenes Grundstück, das der anderen Person passt (nur aus Gruppen, in denen ich wenig habe)
+  const spare = E.ownedBy(g, from).filter(tradeable).filter((pos) => mineIn(pos) <= 1 && SQUARES[pos].type === 'property');
+  for (const pos of wants) {
+    for (const mp of spare) {
+      for (let cash = 0; cash <= Math.max(0, Math.min(myMax, 400)); cash += 10) {
+        const t = mk(side(cash, [mp]), side(0, [pos]));
+        if (fair(t) && !E.tradeError(room, t)) {
+          return { ok: true, give: t.give, get: t.get, note: `Tausch: ${SQUARES[mp].name}${cash ? ' plus ' + cash + ' ₮' : ''} gegen ${SQUARES[pos].name}.` };
+        }
+      }
+    }
+  }
+  return { ok: false, error: 'Mir fällt kein faires Angebot ein – vielleicht fehlt das Geld.' };
 }
 
 // Bots schlagen anderen Bots (und, seltener, anwesenden Menschen) Tauschgeschäfte vor, mit denen sie ein Farbset
@@ -119,7 +193,7 @@ function tradeIdea(room, id) {
         // Menschen bekommen höchstens alle 10 Züge ein Angebot von demselben Bot.
         if (!humanIds.has(p.owner)) return;
         const last = (g.botHumanTrade || {})[id + ':' + p.owner];
-        if (last !== undefined && g.turnCount - last < 10) return;
+        if (last !== undefined && g.turnCount - last < levelOf(room).humanCooldown) return;
       }
       // Nur von Bots kaufen, die mit diesem Feld selbst keinen Satz aufbauen.
       const theirs = positions.filter((x) => g.props[x] && g.props[x].owner === p.owner).length;
@@ -131,7 +205,7 @@ function tradeIdea(room, id) {
   for (const o of options) {
     g.botTradeFactor = g.botTradeFactor || {};
     const factor = g.botTradeFactor[id] || persona(room, id).tradeStart;
-    const offer = Math.ceil((SQUARES[o.pos].price * (o.human ? Math.max(factor, 1.7) : factor)) / 10) * 10;
+    const offer = Math.ceil((SQUARES[o.pos].price * (o.human ? Math.max(factor, (room.settings && room.settings.botLevel) === 'hard' ? 1.5 : 1.7) : factor)) / 10) * 10;
     if (g.money[id] - offer < 100) continue;
     const toHuman = !botIds.has(o.owner);
     g.botTradeTurn = g.botTradeTurn || {};
@@ -228,4 +302,4 @@ function autoAct(room, actor) {
   return res.ok;
 }
 
-module.exports = { botAct, autoAct, decide, PERSONAS };
+module.exports = { botAct, autoAct, decide, PERSONAS, suggestTrade };
