@@ -436,6 +436,13 @@
   function webglOk() {
     try { const c = document.createElement('canvas'); return !!(window.WebGLRenderingContext && (c.getContext('webgl2') || c.getContext('webgl'))); } catch (e) { return false; }
   }
+  const CAMS = [['soft', '🎥 Sanft'], ['fixed', '🎥 Fest'], ['cinema', '🎬 Kino']];
+  let camMode = (CAMS.find((x) => x[0] === safeGet('mono_cam')) || CAMS[0])[0];
+  function applyCam() {
+    const b = $('btn-cam3d');
+    if (b) b.textContent = CAMS.find((x) => x[0] === camMode)[1];
+    if (b3) b3.setCameraMode(camMode);
+  }
   function want3d() {
     const saved = safeGet('mono_view');
     if (saved === '2d') return false;
@@ -449,7 +456,7 @@
     $('board').classList.toggle('mode3d', mode3d);
     const btn = $('btn-view3d');
     if (btn) btn.innerHTML = mode3d ? '🗺️<span class="lbl"> 2D</span>' : '🧊<span class="lbl"> 3D</span>';
-    $('btn-reset3d').classList.toggle('hidden', !mode3d);
+    $('view3d-tools').classList.toggle('hidden', !mode3d);
   }
   async function ensure3d() {
     if (b3 || b3Loading || b3Failed) return;
@@ -466,6 +473,7 @@
         isPickable: (pos) => { const t = SQUARES[pos].type; return t === 'property' || t === 'station' || t === 'utility'; },
       });
       b3 = m;
+      applyCam();
       m.setVisible(mode3d);
       sync3d(true);
     } catch (e) {
@@ -502,6 +510,8 @@
     if (mode3d) ensure3d();
     $('btn-view3d').addEventListener('click', () => setMode3d(!mode3d));
     $('btn-reset3d').addEventListener('click', () => { if (b3) b3.resetView(); });
+    $('btn-cam3d').addEventListener('click', () => { camMode = CAMS[(CAMS.findIndex((x) => x[0] === camMode) + 1) % CAMS.length][0]; safeSet('mono_cam', camMode); applyCam(); });
+    applyCam();
   }
 
   // --- Figuren & Bewegungs-Animation ---
@@ -565,6 +575,7 @@
       el('div', { class: 'jail-text' }, [el('div', { class: 'jail-ico', text: '🚔' }), el('div', { text: `${pname(id)} geht in den Knast!` })]),
     ]);
     board.appendChild(wrap);
+    if (b3 && mode3d) b3.jailFx(id);
     playJailSound();
     await sleep(T(1300));
     shownPos[id] = 10;
@@ -605,7 +616,10 @@
           await sleep(T(m.kind === 'jail' ? 2600 : 1900));
         }
         if (m.kind === 'jail') await jailAnimation(m.id);
-        else await walk(m.id, m.from, m.to, m.kind === 'back' ? -1 : 1);
+        else {
+          await walk(m.id, m.from, m.to, m.kind === 'back' ? -1 : 1);
+          if (m.kind === 'steps' && m.to < m.from && b3 && mode3d) b3.confettiAt(0, false);
+        }
       }
     } finally {
       walking.delete('queue');
@@ -762,6 +776,7 @@
       shownCardSeq = g.lastCard.seq;
       playCardSound();
       const c = g.lastCard;
+      if (b3 && mode3d && b3.showCard({ deck: c.deck, label: c.label, text: c.text, who: `gezogen von ${pname(c.playerId)} – antippen zum Schließen` })) { cardSlot.innerHTML = ''; return; }
       cardSlot.innerHTML = '';
       const card = el('div', { class: `center-card ${c.deck}` }, [
         el('div', { class: 'cc-title', text: c.label }),
@@ -1417,6 +1432,7 @@
     overShown = true;
     playWinSound();
     confetti();
+    if (b3 && mode3d) { b3.confettiAt(0, true); setTimeout(() => b3 && b3.confettiAt(20, true), 500); setTimeout(() => b3 && b3.confettiAt(10, true), 900); }
     const body = $('over-body');
     body.innerHTML = '';
     body.appendChild(el('div', { class: 'over-crown', text: '🏆' }));
@@ -1661,6 +1677,7 @@
   let eventRunning = false;
 
   function showEvent(e) {
+    if (b3 && mode3d) b3.moneyFx({ from: e.payer, to: e.kind === 'rent' ? e.owner : null, amount: e.amount });
     const board = $('board');
     let children;
     if (e.kind === 'rent') {

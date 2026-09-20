@@ -658,3 +658,15 @@ input:focus, select:focus { outline: 2px solid var(--accent-bright); }
 .board.mode3d .jail-bars { display: none; }
 .board.mode3d .jail-anim { animation: none; background: none; }
 .board.mode3d .center-card { display: none; }
+
+.board3d-canvas { transition: opacity 0.35s ease; }
+.tip3d { position: fixed; z-index: 200; pointer-events: none; background: rgba(12,24,18,0.95); color: #fff; border: 1px solid rgba(255,255,255,0.25); border-radius: 10px; padding: 7px 12px; display: flex; flex-direction: column; gap: 2px; box-shadow: 0 6px 20px rgba(0,0,0,0.5); max-width: 240px; }
+.tip3d.hidden { display: none; }
+.tip3d i { display: block; height: 6px; border-radius: 3px; margin-bottom: 3px; }
+.tip3d b { font-size: 15px; }
+.tip3d small { font-size: 12px; opacity: 0.85; }
+.mode3d-ui .me-col, .mode3d-ui .side-col { background: linear-gradient(180deg, rgba(255,255,255,0.055), rgba(255,255,255,0.02)); border: 1px solid rgba(255,255,255,0.1); border-radius: 16px; padding: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.28); }
+.mode3d-ui .dock { border-radius: 16px; }
+.mode3d-ui .board-col { border-radius: 16px; overflow: hidden; }
+.board { transition: opacity 0.3s ease; }
+.board.mode3d { opacity: 1; }

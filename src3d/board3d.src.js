@@ -5,6 +5,7 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 
 const CORNER = 1.45;
@@ -37,6 +38,7 @@ let maxAniso = 4;
 let camMode = 'soft';          // 'soft' (sanft nachführen) | 'fixed' | 'cinema'
 let diceUntil = 0;
 let cardObj = null;
+let elevDeg = 65;
 
 const SIZES = [CORNER, 1, 1, 1, 1, 1, 1, 1, 1, 1, CORNER];
 
@@ -177,12 +179,12 @@ function tex(cv) {
   return t;
 }
 
-function woodTexture() {
+function woodTexture(baseH = 24, baseL = 26, rep = 5) {
   const cv = document.createElement('canvas'); cv.width = cv.height = 1024;
   const c = cv.getContext('2d');
   const plank = 256;
   for (let i = 0; i < 4; i++) {
-    const h = 24 + Math.random() * 10, l = 26 + Math.random() * 6;
+    const h = baseH + Math.random() * 10, l = baseL + Math.random() * 6;
     c.fillStyle = `hsl(${h},42%,${l}%)`; c.fillRect(0, i * plank, 1024, plank);
     for (let j = 0; j < 90; j++) {
       const y = i * plank + Math.random() * plank;
@@ -195,24 +197,57 @@ function woodTexture() {
     c.fillStyle = 'rgba(0,0,0,0.5)'; c.fillRect(0, i * plank, 1024, 3);
   }
   const t = new THREE.CanvasTexture(cv);
-  t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(5, 5); t.anisotropy = maxAniso;
+  t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(rep, rep); t.anisotropy = maxAniso;
   return t;
 }
 
 // ---------------------------------------------------------------- Aufbau
 
 function buildBoard() {
-  const wood = new THREE.MeshStandardMaterial({ color: 0x4a3320, roughness: 0.7 });
-  const base = new THREE.Mesh(new THREE.BoxGeometry(S + 0.6, 0.36, S + 0.6), wood);
+  const wt = woodTexture(20, 20, 3);
+  wt.repeat.set(3, 1);
+  const wood = new THREE.MeshStandardMaterial({ map: wt, roughness: 0.55 });
+  const base = new THREE.Mesh(new RoundedBoxGeometry(S + 0.7, 0.36, S + 0.7, 4, 0.08), wood);
   base.position.y = -0.18 - 0.001;
   base.receiveShadow = true; base.castShadow = true;
   scene.add(base);
+  // Rahmen: erhöhte, abgeschrägte Leisten rund um die Felder
+  const fw = 0.34, fl = S + 0.7;
+  const frameWood = new THREE.MeshStandardMaterial({ map: woodTexture(18, 16, 2), roughness: 0.4, metalness: 0.05 });
+  [[0, -(S / 2 + 0.35 - fw / 2), fl, fw], [0, S / 2 + 0.35 - fw / 2, fl, fw], [-(S / 2 + 0.35 - fw / 2), 0, fw, S + 0.7 - fw * 2], [S / 2 + 0.35 - fw / 2, 0, fw, S + 0.7 - fw * 2]].forEach(([x, z, w, d]) => {
+    const m = new THREE.Mesh(new RoundedBoxGeometry(w, 0.3, d, 3, 0.06), frameWood); m.position.set(x, 0.08, z); m.castShadow = true; m.receiveShadow = true; scene.add(m);
+  });
 
   const inner = S - CORNER * 2;
-  const centre = new THREE.Mesh(new THREE.BoxGeometry(inner, TILE_H, inner), new THREE.MeshStandardMaterial({ color: 0xcfe6d2, roughness: 0.9 }));
+  const centreTex = (() => {
+    const cv = document.createElement('canvas'); cv.width = cv.height = 1024;
+    const c = cv.getContext('2d');
+    c.fillStyle = '#cfe6d2'; c.fillRect(0, 0, 1024, 1024);
+    c.strokeStyle = 'rgba(40,90,60,0.07)'; c.lineWidth = 14;
+    for (let i = -1024; i < 2048; i += 46) { c.beginPath(); c.moveTo(i, 0); c.lineTo(i + 1024, 1024); c.stroke(); }
+    c.strokeStyle = 'rgba(40,90,60,0.1)'; c.lineWidth = 6;
+    [470, 380, 290].forEach((r) => { c.beginPath(); c.arc(512, 512, r, 0, Math.PI * 2); c.stroke(); });
+    const g = c.createRadialGradient(512, 512, 200, 512, 512, 760); g.addColorStop(0, 'rgba(255,255,255,0.22)'); g.addColorStop(1, 'rgba(20,50,30,0.16)');
+    c.fillStyle = g; c.fillRect(0, 0, 1024, 1024);
+    return tex(cv);
+  })();
+  const centre = new THREE.Mesh(new THREE.BoxGeometry(inner, TILE_H, inner), [0, 1, 2, 3, 4, 5].map((i) => new THREE.MeshStandardMaterial(i === 2 ? { map: centreTex, roughness: 0.9 } : { color: 0x8fa896, roughness: 0.9 })));
   centre.position.y = TILE_H / 2;
   centre.receiveShadow = true;
   scene.add(centre);
+
+  // Filz-Feld für die Würfel und weiche Schatten unter Logo und Kartenstapeln
+  const feltCv = document.createElement('canvas'); feltCv.width = 512; feltCv.height = 256;
+  { const c = feltCv.getContext('2d'); c.fillStyle = '#245c3c'; c.beginPath(); c.roundRect(6, 6, 500, 244, 44); c.fill(); c.strokeStyle = '#d8b25a'; c.lineWidth = 8; c.stroke();
+    for (let i = 0; i < 2500; i++) { c.fillStyle = `rgba(255,255,255,${Math.random() * 0.05})`; c.fillRect(Math.random() * 512, Math.random() * 256, 2, 2); } }
+  const felt = new THREE.Mesh(new THREE.PlaneGeometry(3.4, 1.7), new THREE.MeshStandardMaterial({ map: tex(feltCv), roughness: 1, transparent: true }));
+  felt.rotation.x = -Math.PI / 2; felt.position.set(0, TOP + 0.004, 1.6); felt.receiveShadow = true;
+  scene.add(felt);
+  [[0, 0, 7.2, 3.0], [-2.4, -2.4, 3.2, 2.4], [2.4, 2.4, 3.2, 2.4]].forEach(([x, z, w, d]) => {
+    const sh = new THREE.Mesh(new THREE.PlaneGeometry(w, d), new THREE.MeshBasicMaterial({ map: shadowTex(), transparent: true, depthWrite: false, opacity: 0.55 }));
+    sh.rotation.x = -Math.PI / 2; sh.position.set(x, TOP + 0.003, z + 0.12);
+    scene.add(sh);
+  });
 
   // Logo
   const lc = document.createElement('canvas'); lc.width = 1024; lc.height = 360;
@@ -278,15 +313,32 @@ function buildBoard() {
   }
 }
 
-function makeFrame(t, color) {
+function badgeTexture(color, emoji) {
+  const cv = document.createElement('canvas'); cv.width = cv.height = 128;
+  const c = cv.getContext('2d');
+  c.fillStyle = '#fff'; c.beginPath(); c.arc(64, 64, 60, 0, Math.PI * 2); c.fill();
+  c.strokeStyle = color; c.lineWidth = 16; c.stroke();
+  c.textAlign = 'center'; c.textBaseline = 'middle'; c.font = `66px ${FONT}`; c.fillText(emoji || '', 64, 70);
+  return tex(cv);
+}
+
+function makeFrame(t, color, emoji, cssColor) {
   const g = new THREE.Group();
-  const mat = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.35, roughness: 0.5 });
-  const { w, d } = t.rect; const th = 0.07;
+  const mat = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.9, roughness: 0.4 });
+  const { w, d } = t.rect; const th = 0.11;
   [[0, -(d / 2 - th / 2), w - 0.02, th], [0, d / 2 - th / 2, w - 0.02, th], [-(w / 2 - th / 2), 0, th, d - 0.02], [w / 2 - th / 2, 0, th, d - 0.02]].forEach(([x, z, sw, sd]) => {
-    const m = new THREE.Mesh(new THREE.BoxGeometry(sw, 0.05, sd), mat);
-    m.position.set(x, TOP + 0.02, z);
+    const m = new THREE.Mesh(new THREE.BoxGeometry(sw, 0.06, sd), mat);
+    m.position.set(x, TOP + 0.025, z);
+    m.castShadow = true;
     g.add(m);
   });
+  const bc = t.side ? bandCentre(t) : { x: 0, z: 0, alongX: true };
+  let bx, bz;
+  if (bc.alongX) { bx = w / 2 - 0.26; bz = bc.z < 0 ? d / 2 - 0.26 : -(d / 2 - 0.26); }
+  else { bz = d / 2 - 0.26; bx = bc.x > 0 ? -(w / 2 - 0.26) : w / 2 - 0.26; }
+  const badge = new THREE.Mesh(new THREE.CircleGeometry(0.21, 28), new THREE.MeshBasicMaterial({ map: badgeTexture(cssColor || '#888', emoji), transparent: true }));
+  badge.rotation.x = -Math.PI / 2; badge.position.set(bx, TOP + 0.05, bz);
+  g.add(badge);
   g.userData.mat = mat;
   return g;
 }
@@ -331,6 +383,7 @@ function buildHouse(hotel) {
     for (let i = -2; i <= 2; i++) { add(winGeo, winMat, i * 0.11, 0.1, 0.123); add(winGeo, winMat, i * 0.11, 0.1, -0.123); }
     for (let i = -1; i <= 1; i++) { add(winGeo, winMat, i * 0.11, 0.225, 0.103); add(winGeo, winMat, i * 0.11, 0.225, -0.103); }
     add(doorGeo, doorMat, 0, 0.03, 0.123);
+    g.scale.setScalar(1.28);
   } else {
     add(houseGeo, houseMat, 0, 0.055, 0);
     const r = add(roofPrism, roofMat, 0, 0.11, 0);
@@ -338,6 +391,7 @@ function buildHouse(hotel) {
     add(winGeo, winMat, -0.04, 0.07, 0.088); add(winGeo, winMat, 0.04, 0.07, 0.088);
     add(doorGeo, doorMat, 0, 0.03, -0.088);
     add(winGeo, winMat, 0.04, 0.07, -0.088);
+    g.scale.setScalar(1.4);
   }
   return g;
 }
@@ -355,7 +409,7 @@ function setHouses(t, n, animate) {
   } else {
     for (let i = 0; i < n; i++) {
       const h = buildHouse(false);
-      const o = (i - 1.5) * 0.22;
+      const o = (i - 1.5) * 0.235;
       h.position.set(bc.x + (bc.alongX ? o : 0), TOP, bc.z + (bc.alongX ? 0 : o));
       t.group.add(h); t.houses.push(h);
       if (animate && i === n - 1) popIn(h);
@@ -364,12 +418,13 @@ function setHouses(t, n, animate) {
 }
 
 function popIn(obj) {
+  const base = obj.scale.x || 1;
   obj.scale.setScalar(0.01);
   tweens.push({ t: 0, dur: 0.9, fn: (k) => {
     const e = 1 + 2.2 * Math.pow(Math.min(1, k * 1.6) - 1, 3) + 1.2 * Math.pow(Math.min(1, k * 1.6) - 1, 2);
-    obj.scale.setScalar(Math.max(0.01, e));
+    obj.scale.setScalar(Math.max(0.01, e * base));
     obj.rotation.z = Math.sin(k * 22) * 0.14 * Math.pow(1 - k, 2);
-  }, done: () => { obj.scale.setScalar(1); obj.rotation.z = 0; } });
+  }, done: () => { obj.scale.setScalar(base); obj.rotation.z = 0; } });
 }
 
 function bump(t) {
@@ -525,9 +580,18 @@ function slotFor(pos, idx, n, jailed) {
   let x = r.cx, z = r.cz;
   if (jailed) { x += r.w * 0.16; z -= r.d * 0.16; }
   else if (n > 1) {
-    const a = (idx / n) * Math.PI * 2 + 0.6;
-    const rad = r.w > 1.2 ? 0.32 : 0.27;
-    x += Math.cos(a) * rad; z += Math.sin(a) * rad;
+    const corner = r.w > 1.2;
+    if (corner) {
+      const a = (idx / n) * Math.PI * 2 + 0.6;
+      const rad = n === 2 ? 0.36 : 0.5;
+      x += Math.cos(a) * rad; z += Math.sin(a) * rad;
+    } else {
+      const cols = n <= 2 ? n : 3;
+      const row = Math.floor(idx / cols), col = idx % cols;
+      const inRow = Math.min(cols, n - row * cols);
+      x += (col - (inRow - 1) / 2) * 0.34;
+      z += (row - (Math.ceil(n / cols) - 1) / 2) * 0.4;
+    }
   }
   return new THREE.Vector3(x, TOP + 0.005, z);
 }
@@ -545,12 +609,14 @@ function layoutTokens(view, animate) {
   const seen = {};
   view.players.forEach((p) => {
     let tk = tokens[p.id];
-    if (!tk) { tk = tokens[p.id] = makeToken(p); }
+    if (!tk) { tk = tokens[p.id] = makeToken(p); tk.group.scale.setScalar(0.01); const g0 = tk.group, dl = Object.keys(tokens).length * 0.12; tweens.push({ t: -dl, dur: 0.6, fn: (k) => { const kk = Math.max(0, k); const e = 1 + 2.2 * Math.pow(kk - 1, 3) + 1.2 * Math.pow(kk - 1, 2); g0.scale.setScalar(Math.max(0.01, e)); }, done: () => g0.scale.setScalar(1) }); }
     tk.group.visible = !p.bankrupt;
     if (p.bankrupt) return;
     seen[p.pos] = (seen[p.pos] || 0) + 1;
     const jailed = p.inJail && p.pos === 10;
     const dest = slotFor(p.pos, seen[p.pos] - 1, counts[p.pos], jailed);
+    tk.spriteDX = counts[p.pos] > 1 ? (seen[p.pos] - 1 - (counts[p.pos] - 1) / 2) * 0.16 : 0;
+    tk.crowd = counts[p.pos] > 2 ? 0.82 : 1;
     if (jailed || !p.inJail) tk.fxCage = false;
     tk.cage.visible = jailed || tk.fxCage;
     if (jailed && tk.cage.position.y !== 0) tk.cage.position.y = 0;
@@ -818,8 +884,8 @@ export function dismissCard() {
 export function showCard(c) {
   if (!renderer || !visible) return false;
   if (cardObj) { scene.remove(cardObj.mesh); cardObj = null; }
-  const front = new THREE.MeshBasicMaterial({ map: cardFace(c), toneMapped: false });
-  const back = new THREE.MeshBasicMaterial({ map: cardBack(c), toneMapped: false });
+  const front = new THREE.MeshBasicMaterial({ map: cardFace(c), toneMapped: false, transparent: true });
+  const back = new THREE.MeshBasicMaterial({ map: cardBack(c), toneMapped: false, transparent: true });
   const edge = new THREE.MeshStandardMaterial({ color: 0xf4f4ea });
   const mesh = new THREE.Mesh(new THREE.BoxGeometry(4.4, 2.83, 0.05), [edge, edge, edge, edge, front, back]);
   const deck = decks[c.deck === 'chance' ? 1 : 0];
@@ -829,13 +895,13 @@ export function showCard(c) {
   scene.add(mesh);
   const co = { mesh, leaving: false, hover: false };
   cardObj = co;
-  const hoverPt = () => controls.target.clone().add(new THREE.Vector3(0, 2.7, 0.9));
+  const hoverPt = () => controls.target.clone().add(new THREE.Vector3(0, 3.1, 2.6));
   tweens.push({ t: 0, dur: 1.15, fn: (k) => {
     const e = 1 - Math.pow(1 - k, 3);
     const to = hoverPt();
     mesh.position.lerpVectors(from, to, e); mesh.position.y += Math.sin(k * Math.PI) * 1.2;
     mesh.quaternion.slerpQuaternions(fromQ, camera.quaternion, Math.min(1, Math.max(0, (k - 0.15) / 0.8)));
-    mesh.scale.setScalar(0.4 + 0.6 * e);
+    mesh.scale.setScalar(0.35 + 0.45 * e);
   }, done: () => { co.hover = true; } });
   setTimeout(() => { if (cardObj === co) dismissCard(); }, 6500);
   return true;
@@ -847,7 +913,7 @@ function fitDistance() {
   const w = container.clientWidth || 800, h = container.clientHeight || 600;
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
-  const el = (65 * Math.PI) / 180;
+  const el = (elevDeg * Math.PI) / 180;
   const dir = new THREE.Vector3(0, Math.sin(el), Math.cos(el));
   const corners = [[-1, -1], [1, -1], [-1, 1], [1, 1]].map(([x, z]) => new THREE.Vector3(x * (S / 2 + 0.4), 0, z * (S / 2 + 0.4)));
   let lo = 6, hi = 80;
@@ -861,6 +927,11 @@ function fitDistance() {
   }
   fitDist = hi;
   return { dir, dist: hi };
+}
+
+export function setTopDown(on) {
+  elevDeg = on ? 84 : 65;
+  if (camera) resetView();
 }
 
 export function resetView() {
@@ -904,22 +975,26 @@ function tick() {
       const e = k;
       tk.group.position.lerpVectors(tk.tw.from, tk.tw.to, e);
       tk.group.position.y = TOP + 0.005 + Math.sin(k * Math.PI) * tk.tw.h;
-      tk.pawn.scale.set(0.95, 0.95 * (k > 0.9 ? 0.86 + (1 - k) * 1.4 : 1), 0.95);
-      if (k >= 1) { tk.group.position.copy(tk.tw.to); tk.tw = null; tk.pawn.scale.setScalar(0.95); }
+      tk.pawn.scale.set(0.95 * (tk.crowd || 1), 0.95 * (tk.crowd || 1) * (k > 0.9 ? 0.86 + (1 - k) * 1.4 : 1), 0.95 * (tk.crowd || 1));
+      if (k >= 1) { tk.group.position.copy(tk.tw.to); tk.tw = null; tk.pawn.scale.setScalar(0.95 * (tk.crowd || 1)); }
     } else {
-      tk.pawn.scale.set(0.95, 0.95, 0.95);
+      tk.pawn.scale.setScalar(0.95 * (tk.crowd || 1));
     }
     const active = tk.id === activeId;
     tk.ring.visible = active;
     if (active) { tk.ring.material.opacity = 0.55 + Math.sin(pulse * 5) * 0.35; const s = 1 + Math.sin(pulse * 5) * 0.08; tk.ring.scale.set(s, s, s); if (!tk.tw) tk.pawn.position.y = Math.abs(Math.sin(pulse * 3)) * 0.06; }
     else tk.pawn.position.y = 0;
+    tk.sprite.position.x += ((tk.spriteDX || 0) - tk.sprite.position.x) * 0.15;
     tk.sprite.position.y = 1.32 + (active ? Math.sin(pulse * 3 + tk.bob) * 0.06 : 0);
   });
   decks.forEach((d) => { d.position.y = d.userData.base + Math.sin(pulse * 1.4 + d.userData.phase) * 0.05; });
 
   if (cardObj && cardObj.hover && !cardObj.leaving) {
     const m = cardObj.mesh;
-    m.position.copy(controls.target).add(new THREE.Vector3(0, 2.7 + Math.sin(pulse * 2) * 0.05, 0.9));
+    m.position.copy(controls.target).add(new THREE.Vector3(0, 3.1 + Math.sin(pulse * 2) * 0.05, 2.6));
+    cardObj.age = (cardObj.age || 0) + dt;
+    const fade = cardObj.age > 2.5 ? 0.62 : 1;
+    m.material.forEach((mm, i) => { if (i >= 4) { mm.transparent = true; mm.opacity += (fade - mm.opacity) * 0.08; } });
     m.quaternion.slerp(camera.quaternion, 0.25);
   }
 
@@ -995,7 +1070,7 @@ export function init(opts) {
   controls = new OrbitControls(camera, canvas);
   controls.enablePan = false;
   controls.enableDamping = true; controls.dampingFactor = 0.08;
-  controls.minPolarAngle = 0.25; controls.maxPolarAngle = 1.3;
+  controls.minPolarAngle = 0.04; controls.maxPolarAngle = 1.3;
   controls.rotateSpeed = 0.7;
   controls.addEventListener('start', () => { interactUntil = performance.now() + 6000; });
   controls.addEventListener('change', () => { if (performance.now() < interactUntil + 1) interactUntil = performance.now() + 6000; });
@@ -1013,10 +1088,12 @@ export function init(opts) {
     if (hit.card) { dismissCard(); return; }
     if (hit.token) O.onToken && O.onToken(hit.token); else if (hit.pos !== undefined) O.onTile && O.onTile(hit.pos);
   });
+  canvas.addEventListener('pointerleave', () => { if (hoverPos !== null) { tileMeshes[hoverPos].topMat.emissive.setHex(0x000000); hoverPos = null; } O.onHover && O.onHover(null); });
   canvas.addEventListener('pointermove', (e) => {
     if (e.pointerType === 'touch') return;
     const hit = pick(e);
     const p = hit && hit.pos !== undefined ? hit.pos : null;
+    O.onHover && O.onHover(p, e.clientX, e.clientY);
     if (p !== hoverPos) {
       if (hoverPos !== null) tileMeshes[hoverPos].topMat.emissive.setHex(0x000000);
       hoverPos = p;
@@ -1049,9 +1126,17 @@ function pick(e) {
 }
 
 export function setVisible(v) {
+  const was = visible;
   visible = v;
-  if (canvas) canvas.style.display = v ? 'block' : 'none';
-  if (v) { clock.getDelta(); resize(); }
+  if (!canvas) return;
+  if (v && (!was || !canvas.style.display)) {
+    canvas.style.display = 'block'; canvas.style.opacity = '0';
+    requestAnimationFrame(() => requestAnimationFrame(() => { canvas.style.opacity = '1'; }));
+    clock.getDelta(); resize();
+  } else if (!v && (was || !canvas.style.display)) {
+    canvas.style.opacity = '0';
+    setTimeout(() => { if (!visible) canvas.style.display = 'none'; }, 350);
+  }
 }
 
 let firstUpdate = true;
@@ -1064,10 +1149,10 @@ export function update(view) {
   tileMeshes.forEach((t) => {
     const p = byPos[t.pos];
     const owner = p ? p.owner : null;
-    if (owner !== t.owner) {
+    if (owner !== t.owner || (owner && t.ownerEmoji !== p.ownerEmoji)) {
       if (t.frame) { t.group.remove(t.frame); t.frame = null; }
-      if (owner) { t.frame = makeFrame(t, new THREE.Color(p.ownerColor)); t.group.add(t.frame); if (!firstUpdate) bump(t); }
-      t.owner = owner;
+      if (owner) { t.frame = makeFrame(t, new THREE.Color(p.ownerColor), p.ownerEmoji, p.ownerColor); t.group.add(t.frame); if (!firstUpdate) bump(t); }
+      t.owner = owner; t.ownerEmoji = p ? p.ownerEmoji : null;
     }
     const houses = p ? p.houses : 0;
     if (houses !== t.houseCount) { setHouses(t, houses, !firstUpdate && houses > t.houseCount); t.houseCount = houses; }
