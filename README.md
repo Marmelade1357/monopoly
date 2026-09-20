@@ -39,3 +39,7 @@ npm test           # Regeln, 40 Bot-Partien mit Invarianten-Check, Socket-Ablauf
 ## Hausregeln (in der Lobby wählbar)
 
 Der Host kann vor dem Start Regeln ein- oder ausschalten: Frei-Parken-Jackpot, doppeltes Gehalt auf LOS, Auktionen, Miete im Knast und gleichmäßiges Bauen (siehe RULE_DEFAULTS in src/engine.js).
+
+## Spielregeln in der Lobby
+
+Zug-Timer (automatisches Spielen nach 30 s bis 2 min), Spielende nach Zeit oder Runden (Sieger nach Vermögen) und Tempo (normal/schnell) stellt der Host oben bei den Spielregeln ein. Bots haben Charaktere (vorsichtig, mutig, Händler).

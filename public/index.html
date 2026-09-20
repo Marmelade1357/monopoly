@@ -44,6 +44,7 @@
     </div>
 
     <p class="hint">2–6 Spieler · Ein Gerät pro Person (Handy, Tablet oder PC)</p>
+    <p class="build-id">Version __BUILD__</p>
   </div>
 
   <a id="btn-back-hub-home" class="btn ghost small hidden back-hub-home" href="/">← Spielauswahl</a>
@@ -76,8 +77,14 @@
     </div>
     <p id="lobby-settings-display" class="hint hidden"></p>
 
-    <h3 class="rules-h">Hausregeln</h3>
+    <h3 class="rules-h">Spielregeln</h3>
     <div id="lobby-rules" class="rule-list">
+      <div class="rule-item select-rule"><span><b>⏱ Zug-Timer</b><small>Wer zu lange braucht, wird automatisch gespielt (würfeln, nicht kaufen, nicht mitbieten, Zug beenden).</small></span>
+        <select id="set-timer"><option value="0">Aus</option><option value="30">30 Sekunden</option><option value="45">45 Sekunden</option><option value="60">60 Sekunden</option><option value="90">90 Sekunden</option><option value="120">2 Minuten</option></select></div>
+      <div class="rule-item select-rule"><span><b>🏁 Spielende</b><small>Nach der Zeit oder den Runden gewinnt, wer am meisten besitzt (Bargeld, Grundstücke, Gebäude).</small></span>
+        <select id="set-limit"><option value="none">Bis nur noch einer übrig ist</option><option value="m30">Nach 30 Minuten</option><option value="m45">Nach 45 Minuten</option><option value="m60">Nach 60 Minuten</option><option value="m90">Nach 90 Minuten</option><option value="m120">Nach 2 Stunden</option><option value="r15">Nach 15 Runden</option><option value="r20">Nach 20 Runden</option><option value="r30">Nach 30 Runden</option><option value="r40">Nach 40 Runden</option><option value="r60">Nach 60 Runden</option></select></div>
+      <div class="rule-item select-rule"><span><b>⚡ Tempo</b><small>Schnell verkürzt Würfel-, Lauf- und Kartenanimationen und lässt Bots zügiger ziehen.</small></span>
+        <select id="set-speed"><option value="normal">Normal</option><option value="fast">Schnell</option></select></div>
       <label class="rule-item"><input type="checkbox" data-rule="freeParking"><span><b>💰 Frei-Parken-Jackpot</b><small>Steuern, Kautionen und Strafen landen in der Tischmitte. Wer auf „Frei Parken“ landet, kassiert alles.</small></span></label>
       <label class="rule-item"><input type="checkbox" data-rule="doubleGo"><span><b>🎯 Doppeltes Gehalt auf LOS</b><small>Wer genau auf LOS landet, erhält 400 statt 200 Taler.</small></span></label>
       <label class="rule-item"><input type="checkbox" data-rule="auction"><span><b>🔨 Auktionen</b><small>Kauft niemand ein freies Grundstück, wird es versteigert. Aus: es bleibt einfach frei.</small></span></label>
@@ -97,6 +104,9 @@
     <div class="game-header-left">
       <span class="room-code small" id="game-code"></span>
       <span id="turn-badge" class="turn-badge"></span>
+      <span class="build-id" title="Version">__BUILD__</span>
+      <span id="game-info" class="game-info"></span>
+      <span id="timer-badge" class="timer-badge hidden"></span>
     </div>
     <div class="game-header-right">
       <button id="btn-show-log" class="btn ghost small" type="button" title="Verlauf">🗒️<span class="lbl"> Verlauf</span></button>
@@ -117,6 +127,7 @@
         <div id="board" class="board"></div>
       </div>
       <div id="dock" class="dock">
+        <div class="timer-bar hidden" id="timer-bar"><i></i></div>
         <div class="dock-actions" id="dock-actions"></div>
       </div>
     </div>

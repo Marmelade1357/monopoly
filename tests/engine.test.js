@@ -401,4 +401,27 @@ function ruleRoom(n, rules) {
   expectFail(act(r2, 'p0', { type: 'build', pos: 3 }), 'Standard: gleichmäßig');
 }
 
+
+// 12. Spielende nach Runden, Statistiken -----------------------------------------------------
+{
+  const room = ruleRoom(2, {});
+  room.settings.limit = 'r2';
+  const g = room.g;
+  own(room, 'p0', 39); own(room, 'p0', 37); // p0 ist reicher
+  for (let i = 0; i < 4 && g.phase !== 'over'; i++) {
+    g.phase = 'end';
+    act(room, E.curId(room), { type: 'endTurn' });
+  }
+  assert(g.phase === 'over' && g.limitReached && g.winner === 'p0', `Rundenlimit beendet das Spiel (Phase ${g.phase}, Sieger ${g.winner})`);
+  assert(g.ranking[0] === 'p0' && g.ranking.length === 2, 'Rangliste nach Vermögen');
+  assert(room.phase === 'gameover', 'Raum im Zustand gameover');
+}
+{
+  const room = ruleRoom(2, {});
+  own(room, 'p1', 3);
+  roll(room, 'p0', 1, 2);
+  assert(room.g.stats.p0.rentOut === 4 && room.g.stats.p1.rentIn === 4, 'Miete wird in der Statistik gezählt');
+  assert(room.g.events.some((e) => e.kind === 'rent' && e.amount === 4 && e.owner === 'p1'), 'Miet-Ereignis wird protokolliert');
+}
+
 console.log('OK: Engine-Regeln (Miete, Knast, Auktion, Bauen, Hypothek, Handel, Pleite, Karten).');

@@ -7,6 +7,18 @@ const E = require('./engine.js');
 
 const { SQUARES, GROUPS, GROUP_POSITIONS } = BOARD;
 
+// Charaktere der Bots: unterschiedliche Vorsicht beim Kaufen, Bauen und Bieten.
+const PERSONAS = {
+  balanced: { buyReserve: 120, buildReserve: 200, bidFactor: 0.85, tradeStart: 1.5, tradeAccept: 1.15 },
+  careful:  { buyReserve: 300, buildReserve: 400, bidFactor: 0.7,  tradeStart: 1.4, tradeAccept: 1.3 },
+  bold:     { buyReserve: 20,  buildReserve: 60,  bidFactor: 1.1,  tradeStart: 1.5, tradeAccept: 1.1 },
+  trader:   { buyReserve: 120, buildReserve: 200, bidFactor: 0.85, tradeStart: 1.25, tradeAccept: 1.0 },
+};
+function persona(room, id) {
+  const p = room.players.find((x) => x.id === id);
+  return PERSONAS[(p && p.persona) || 'balanced'] || PERSONAS.balanced;
+}
+
 function rnd(room) { return (room.rng || Math.random)(); }
 
 function completesSet(g, id, pos) {
@@ -36,7 +48,7 @@ function manage(room, id) {
   }
 
   // 2. Bauen, solange ein Puffer bleibt.
-  const reserve = 200;
+  const reserve = persona(room, id).buildReserve;
   const candidates = owned
     .filter((pos) => SQUARES[pos].type === 'property' && !E.buildCheck(room, id, pos))
     .filter((pos) => money - GROUPS[SQUARES[pos].group].houseCost >= reserve)
@@ -81,7 +93,7 @@ function decideTrade(room, id) {
     const breaksSet = sq.group && E.ownsAllInGroup(g, id, sq.group) && sq.group !== 'utility' && sq.group !== 'station';
     return s + sq.price * (breaksSet ? 3 : 1.15);
   }, 0) + t.get.cards * 60;
-  if (receives > 0 && receives >= gives * 1.15) return { type: 'acceptTrade' };
+  if (receives > 0 && receives >= gives * persona(room, id).tradeAccept) return { type: 'acceptTrade' };
   return { type: 'cancelTrade' };
 }
 
@@ -111,7 +123,7 @@ function tradeIdea(room, id) {
   options.sort((a, b) => b.mine - a.mine);
   for (const o of options) {
     g.botTradeFactor = g.botTradeFactor || {};
-    const factor = g.botTradeFactor[id] || 1.5;
+    const factor = g.botTradeFactor[id] || persona(room, id).tradeStart;
     const offer = Math.ceil((SQUARES[o.pos].price * factor) / 10) * 10;
     if (g.money[id] - offer < 100) continue;
     g.botTradeTurn = g.botTradeTurn || {};
@@ -138,13 +150,13 @@ function decide(room, actor) {
       const sq = SQUARES[g.buy.pos];
       const left = g.money[id] - sq.price;
       if (left < 0) return { type: 'declineBuy' };
-      if (completesSet(g, id, sq.pos) || left >= 120) return { type: 'buy' };
+      if (completesSet(g, id, sq.pos) || left >= persona(room, id).buyReserve) return { type: 'buy' };
       return { type: 'declineBuy' };
     }
     case 'auction': {
       const a = g.auction;
       const sq = SQUARES[a.pos];
-      const max = Math.min(Math.floor(valueOf(g, id, a.pos) * 0.85), g.money[id] - 20);
+      const max = Math.min(Math.floor(valueOf(g, id, a.pos) * persona(room, id).bidFactor), g.money[id] - 20);
       const minRaise = Math.max(a.minBid, a.highBid + 1);
       if (minRaise > max) return { type: 'passBid' };
       const step = Math.max(1, Math.round(sq.price * (0.03 + rnd(room) * 0.06)));
@@ -187,4 +199,24 @@ function botAct(room, actor) {
   return res.ok;
 }
 
-module.exports = { botAct, decide };
+// Zug-Timer: Für Menschen, die zu lange brauchen. Bewusst vorsichtig - würfeln,
+// nichts kaufen, nicht mitbieten, Zug beenden, Schulden nur durch Verkauf/Beleihen.
+function autoAct(room, actor) {
+  const g = room.g;
+  const id = actor.id;
+  let action = null;
+  switch (actor.kind) {
+    case 'roll': action = g.inJail[id] && g.jailCards[id].length ? { type: 'useJailCard' } : { type: 'roll' }; break;
+    case 'buy': action = { type: 'declineBuy' }; break;
+    case 'auction': action = { type: 'passBid' }; break;
+    case 'end': action = { type: 'endTurn' }; break;
+    case 'debt': action = decideDebt(room, id); break;
+    case 'trade': action = { type: 'cancelTrade' }; break;
+    default: return false;
+  }
+  let res = E.act(room, id, action);
+  if (!res.ok) { const fb = fallback(actor); if (fb) res = E.act(room, id, fb); }
+  return res.ok;
+}
+
+module.exports = { botAct, autoAct, decide, PERSONAS };

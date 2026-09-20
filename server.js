@@ -9,7 +9,7 @@ const express = require('express');
 const { Server } = require('socket.io');
 
 const engine = require('./src/engine.js');
-const { botAct } = require('./src/bots.js');
+const { botAct, autoAct } = require('./src/bots.js');
 
 const app = express();
 const server = http.createServer(app);
@@ -23,7 +23,7 @@ const BUILD_ID = Date.now().toString(36);
 function serveIndex(req, res) {
   fs.readFile(path.join(__dirname, 'public', 'index.html'), 'utf8', (err, html) => {
     if (err) return res.status(500).send('index.html fehlt');
-    const out = html.replace(/(href|src)="(style\.css|client\.js|board-data\.js)"/g, `$1="$2?v=${BUILD_ID}"`);
+    const out = html.replace(/__BUILD__/g, BUILD_ID).replace(/(href|src)="(style\.css|client\.js|board-data\.js)"/g, `$1="$2?v=${BUILD_ID}"`);
     res.setHeader('Cache-Control', 'no-cache');
     res.type('html').send(out);
   });
@@ -57,6 +57,7 @@ const TOKENS = [
   { emoji: '🦜', color: '#22c55e' },
 ];
 
+const BOT_PERSONA = { Gustav: 'bold', Klaas: 'careful', Karlo: 'trader', Gundel: 'careful', 'Düsentrieb': 'trader', Panzerknacker: 'bold' };
 const BOT_NAME_POOL = ['Gustav', 'Klaas', 'Karlo', 'Gundel', 'Düsentrieb', 'Panzerknacker'];
 
 // Verzögerungen für Bot-Aktionen - über Umgebungsvariablen konfigurierbar,
@@ -71,6 +72,14 @@ const HOST_HANDOVER_MS = Number(process.env.HOST_HANDOVER_MS) || 20000;
 
 function randomDelay() {
   return BOT_DELAY_MIN + Math.random() * Math.max(0, BOT_DELAY_MAX - BOT_DELAY_MIN);
+}
+
+// Bots ziehen im Schnell-Modus und ab der zweiten Runde zügiger.
+function botDelay(room) {
+  let d = randomDelay();
+  if (room.settings.speed === 'fast') d *= 0.5;
+  if (room.g && room.g.round >= 2) d *= 0.7;
+  return d;
 }
 
 function makeRoomCode() {
@@ -134,7 +143,7 @@ function createRoom() {
     hostId: null,
     players: [], // { id, token, name, socketId, connected, isBot, tokenIdx }
     phase: 'lobby', // lobby | playing | gameover
-    settings: { startMoney: DEFAULT_START_MONEY, rules: Object.assign({}, engine.RULE_DEFAULTS) },
+    settings: { startMoney: DEFAULT_START_MONEY, rules: Object.assign({}, engine.RULE_DEFAULTS), turnTimer: 0, limit: 'none', speed: 'normal' },
     g: null,
     logs: [],
     botTimer: null,
@@ -213,6 +222,7 @@ function addBot(room) {
   const usedNames = new Set(room.players.map((p) => p.name));
   const name = BOT_NAME_POOL.find((n) => !usedNames.has(n)) || `Bot ${room.players.length + 1}`;
   const bot = newPlayer(room, name, null, true);
+  bot.persona = BOT_PERSONA[name] || ['careful', 'bold', 'trader'][Math.floor(Math.random() * 3)];
   log(room, `${name} (Bot) wurde hinzugefügt.`);
   return bot;
 }
@@ -250,13 +260,16 @@ function publicState(room) {
       connected: p.connected,
       isHost: p.id === room.hostId,
       isBot: p.isBot,
+      persona: p.persona || null,
       left: !!p.left,
       emoji: TOKENS[p.tokenIdx].emoji,
       color: TOKENS[p.tokenIdx].color,
     })),
     game,
     logs: room.logs.slice(-60),
+    now: Date.now(),
     wait: waitInfo(room),
+    timer: room.timerInfo ? { actorId: room.timerInfo.actorId, remainingMs: Math.max(0, room.timerInfo.deadline - Date.now()), total: room.timerInfo.total } : null,
   };
 }
 
@@ -282,11 +295,61 @@ function updateAnimLock(room) {
   seen.roll = g.rollSeq;
   seen.move = g.moves && g.moves.length ? g.moves[g.moves.length - 1].seq : seen.move;
   seen.card = g.lastCard ? g.lastCard.seq : seen.card;
-  if (ms > 0) room.animUntil = Math.max(Date.now(), room.animUntil || 0) + (ms + 300) * ANIM_SCALE;
+  const speed = room.settings.speed === 'fast' ? 0.55 : 1;
+  if (ms > 0) room.animUntil = Math.max(Date.now(), room.animUntil || 0) + (ms * speed + 300) * ANIM_SCALE;
+}
+
+const TIMER_SCALE = process.env.TIMER_SCALE !== undefined ? Number(process.env.TIMER_SCALE) : 1;
+
+// Zug-Timer (Lobby-Regel): Wer zu lange braucht, wird einmalig automatisch gespielt.
+function timerActor(room) {
+  if (!room.settings.turnTimer || room.phase !== 'playing' || !room.g || room.g.phase === 'over') return null;
+  return engine.pendingActors(room).find((a) => {
+    const p = findPlayer(room, a.id);
+    return p && !p.isBot && p.connected && !p.left;
+  }) || null;
+}
+
+function timerSig(room, actor) {
+  const g = room.g;
+  return [g.turnCount, g.phase, actor.id, actor.kind, g.rollSeq, g.auction ? g.auction.bids.length + ':' + g.auction.idx : '', g.debts.length, g.trade ? g.trade.id : ''].join('|');
+}
+
+function updateTurnTimer(room) {
+  const actor = timerActor(room);
+  if (!actor) {
+    if (room.turnTimer) { clearTimeout(room.turnTimer); room.turnTimer = null; }
+    room.timerInfo = null;
+    room.timerSig = null;
+    return;
+  }
+  const sig = timerSig(room, actor);
+  if (sig === room.timerSig) return;
+  room.timerSig = sig;
+  if (room.turnTimer) clearTimeout(room.turnTimer);
+  const total = room.settings.turnTimer * 1000 * TIMER_SCALE;
+  const deadline = Math.max(Date.now(), room.animUntil || 0) + total;
+  room.timerInfo = { actorId: actor.id, deadline, total };
+  room.turnTimer = setTimeout(() => {
+    room.turnTimer = null;
+    if (!rooms.has(room.code)) return;
+    const a = timerActor(room);
+    if (!a || timerSig(room, a) !== sig) return;
+    const p = findPlayer(room, a.id);
+    log(room, `⏱ Zeit abgelaufen – ${p ? p.name : 'Spieler'} wird automatisch gespielt.`);
+    try {
+      autoAct(room, a);
+    } catch (err) { console.error('Timer-Fehler:', err); }
+    touchRoom(room);
+    room.timerSig = null; // nächste Entscheidung bekommt frische Zeit
+    broadcastState(room);
+  }, Math.max(1000, deadline - Date.now()));
+  if (room.turnTimer.unref) room.turnTimer.unref();
 }
 
 function broadcastState(room) {
   updateAnimLock(room);
+  updateTurnTimer(room);
   io.to(room.code).emit('gameState', publicState(room));
   scheduleBots(room);
 }
@@ -317,7 +380,7 @@ function scheduleBots(room) {
       touchRoom(room);
     }
     broadcastState(room);
-  }, Math.max(randomDelay(), (room.animUntil || 0) - Date.now()));
+  }, Math.max(botDelay(room), (room.animUntil || 0) - Date.now()));
   if (room.botTimer.unref) room.botTimer.unref();
 }
 
@@ -489,6 +552,9 @@ io.on('connection', (socket) => {
     if (socket.data.playerId !== room.hostId) return;
     const s = settings || {};
     room.settings.startMoney = clampInt(s.startMoney, 200, 100000, room.settings.startMoney);
+    if (s.turnTimer !== undefined) room.settings.turnTimer = [0, 30, 45, 60, 90, 120].includes(Number(s.turnTimer)) ? Number(s.turnTimer) : 0;
+    if (s.limit !== undefined) room.settings.limit = /^(none|m(30|45|60|90|120)|r(15|20|30|40|60))$/.test(String(s.limit)) ? String(s.limit) : 'none';
+    if (s.speed !== undefined) room.settings.speed = s.speed === 'fast' ? 'fast' : 'normal';
     if (s.rules && typeof s.rules === 'object') {
       Object.keys(engine.RULE_DEFAULTS).forEach((k) => {
         if (typeof s.rules[k] === 'boolean') room.settings.rules[k] = s.rules[k];
@@ -503,7 +569,7 @@ io.on('connection', (socket) => {
     if (socket.data.playerId !== room.hostId) return;
     if (room.players.length < MIN_PLAYERS || room.players.length > MAX_PLAYERS) return;
     room.phase = 'playing';
-    room.animSeen = undefined; room.animUntil = 0;
+    room.animSeen = undefined; room.animUntil = 0; room.timerSig = null; room.timerInfo = null; if (room.turnTimer) { clearTimeout(room.turnTimer); room.turnTimer = null; }
     room.logs = [];
     engine.initGame(room);
     touchRoom(room);
@@ -538,7 +604,7 @@ io.on('connection', (socket) => {
     if (room.botTimer) { clearTimeout(room.botTimer); room.botTimer = null; }
     room.phase = 'lobby';
     room.g = null;
-    room.animSeen = undefined; room.animUntil = 0;
+    room.animSeen = undefined; room.animUntil = 0; room.timerSig = null; room.timerInfo = null; if (room.turnTimer) { clearTimeout(room.turnTimer); room.turnTimer = null; }
     room.logs = [];
     // Wer die Partie verlassen hat, verschwindet aus der Lobby.
     room.players = room.players.filter((p) => !p.left);

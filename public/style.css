@@ -490,8 +490,8 @@ input:focus, select:focus { outline: 2px solid var(--accent-bright); }
   .center-col { display: contents; }
   .board-col { order: 1; width: 100%; aspect-ratio: 1 / 1; height: auto; flex: none; }
   .dock { order: 2; position: sticky; bottom: 0; z-index: 20; padding: 8px 10px; min-height: 0; }
-  .me-col { order: 3; overflow: visible; }
-  .side-col { order: 4; margin-top: 0; overflow: visible; }
+  .me-col { order: 3; overflow: visible; flex: none; }
+  .side-col { order: 4; margin-top: 0; overflow: visible; flex: none; }
   .dock-money { font-size: 1.3rem; }
   .game-header { padding: 4px 8px; flex-wrap: nowrap; }
   .game-header .lbl { display: none; }
@@ -557,3 +557,83 @@ input:focus, select:focus { outline: 2px solid var(--accent-bright); }
 @keyframes deck-bob { 0%, 100% { translate: 0 0; } 50% { translate: 0 -0.4cqw; } }
 .confetti { position: fixed; top: -20px; width: 10px; height: 16px; z-index: 600; pointer-events: none; animation: confetti-fall linear forwards; }
 @keyframes confetti-fall { 0% { transform: translate(0, 0) rotate(0); opacity: 1; } 100% { transform: translate(var(--dx), 110vh) rotate(720deg); opacity: 0.9; } }
+
+.build-id { font-size: 0.62rem; color: var(--text-dim); opacity: 0.55; margin: 6px 0 0; text-align: center; }
+.game-header .build-id { margin: 0; }
+@media (min-width: 901px) {
+  /* feste Höhe: wechselnde Aktionen dürfen das Spielfeld nie verschieben */
+  .dock { height: 112px; min-height: 112px; overflow-y: auto; }
+}
+@media (max-width: 900px) { .game-header .build-id { display: none; } }
+
+/* ---- Neue Lobby-Regeln, Timer, Auktion, Statistik ---- */
+.rule-item.select-rule { cursor: default; justify-content: space-between; align-items: center; flex-wrap: wrap; }
+.rule-item.select-rule select { min-width: 190px; max-width: 100%; }
+.tag.persona { background: #3a5266; }
+.game-info { font-size: 0.8rem; color: var(--text-dim); font-weight: 700; }
+.timer-badge { font-weight: 800; font-size: 0.85rem; padding: 2px 10px; border-radius: 999px; background: #2b4a61; color: #fff; }
+.timer-badge.urgent { background: #b3261e; animation: tk-pulse 0.7s ease-in-out infinite; }
+.timer-badge.mine { background: #1a7a4c; }
+.dock { position: relative; }
+.timer-bar { position: absolute; left: 10px; right: 10px; top: 3px; height: 4px; background: rgba(255,255,255,0.12); border-radius: 2px; overflow: hidden; }
+.timer-bar i { display: block; height: 100%; width: 100%; background: var(--success); transition: width 0.4s linear, background 0.4s; }
+.timer-bar.urgent i { background: #ef5347; }
+
+.splash.event { top: 68%; display: flex; align-items: center; gap: 1.4cqw; white-space: normal; font-size: 2cqw; padding: 1cqw 2.4cqw; border-width: 0.25cqw; animation-duration: 2.4s; }
+.splash.event .ev-text small { display: block; font-weight: 600; opacity: 0.85; font-size: 1.5cqw; }
+.splash.bust { background: #4a0f0f; border-color: #ff5a4d; font-size: 4cqw; animation-name: splash-bust; animation-duration: 2.4s; }
+@keyframes splash-bust { 0% { opacity: 0; transform: translate(-50%, -50%) scale(0.3); } 12% { opacity: 1; transform: translate(-50%, -50%) scale(1.2) rotate(-3deg); } 20% { transform: translate(-46%, -50%) rotate(3deg); } 28% { transform: translate(-54%, -50%) rotate(-3deg); } 36% { transform: translate(-50%, -50%) rotate(0); } 85% { opacity: 1; } 100% { opacity: 0; transform: translate(-50%, -50%) scale(0.9); } }
+.splash.hammer { background: #5a3b12; border-color: #ffd54f; font-size: 3.4cqw; animation-duration: 2.2s; }
+
+.auction-panel { position: absolute; left: 12%; right: 12%; top: 18%; bottom: 18%; z-index: 12; background: #0f2016; z-index: 15; color: #fff; border: 0.35cqw solid var(--gold); border-radius: 1.6cqw; padding: 1.4cqw 2cqw; display: flex; gap: 2cqw; align-items: center; box-shadow: 0 1cqw 3cqw rgba(0,0,0,0.5); animation: card-fade 0.3s ease-out; }
+@keyframes card-fade { from { opacity: 0; transform: scale(0.94); } to { opacity: 1; transform: none; } }
+.auction-panel .ap-card { flex: none; width: 15cqw; }
+.auction-panel .ap-card .pc { width: 100%; height: auto; min-height: 15cqw; font-size: 1.5cqw; cursor: default; }
+.auction-panel .ap-card .pc .pc-name { font-size: 1.6cqw; }
+.auction-panel .ap-card .pc .pc-meta { font-size: 1.3cqw; }
+.auction-panel .ap-card .pc .pc-band { height: 3.4cqw; }
+.ap-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.8cqw; }
+.ap-title { font-size: 1.5cqw; text-transform: uppercase; letter-spacing: 0.2cqw; color: var(--gold-bright); font-weight: 800; }
+.ap-price { font-size: 4cqw; font-weight: 900; color: var(--gold-bright); line-height: 1; }
+.ap-price.hit { animation: hammer-hit 0.6s ease-out; }
+@keyframes hammer-hit { 0% { transform: scale(1.5); color: #fff; } 40% { transform: scale(0.92); } 100% { transform: scale(1); } }
+.ap-sub { font-size: 1.5cqw; color: #cfe2d6; }
+.ap-hammer { position: absolute; right: 1.5cqw; top: 0.5cqw; font-size: 4cqw; transform-origin: 80% 90%; animation: hammer-swing 0.6s ease-out; }
+@keyframes hammer-swing { 0% { transform: rotate(-70deg); opacity: 0; } 50% { transform: rotate(15deg); opacity: 1; } 100% { transform: rotate(0); opacity: 1; } }
+.ap-bidders { display: flex; flex-wrap: wrap; gap: 0.6cqw; }
+.ap-bidder { display: flex; align-items: center; gap: 0.5cqw; padding: 0.4cqw 1cqw; border-radius: 999px; background: #22412f; font-size: 1.4cqw; border: 0.2cqw solid transparent; }
+.ap-bidder.turn { border-color: var(--gold); background: #33593f; }
+.ap-bidder.high { background: #1a7a4c; }
+.ap-bidder.passed { opacity: 0.4; text-decoration: line-through; }
+.ap-bids { font-size: 1.3cqw; color: #a9c4b3; display: flex; flex-direction: column; gap: 0.2cqw; }
+
+.stats-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; margin: 10px 0; }
+.stats-table th { font-weight: 600; color: var(--text-dim); padding: 4px 6px; text-align: right; }
+.stats-table th:first-child, .stats-table td:first-child { text-align: left; }
+.stats-table td { padding: 5px 6px; text-align: right; border-top: 1px solid rgba(255,255,255,0.08); }
+.stats-table td.best { color: var(--gold-bright); font-weight: 800; }
+.awards { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 12px; }
+.award { background: var(--bg-alt); border: 1px solid var(--border); border-radius: 999px; padding: 4px 12px; font-size: 0.8rem; }
+#over-modal .modal-content.over-wide { max-width: 680px; }
+
+.trade-tips { background: rgba(244,201,93,0.08); border: 1px solid rgba(244,201,93,0.35); border-radius: 10px; padding: 8px 10px; margin: 10px 0 0; }
+.trade-tips h4 { margin: 0 0 6px; font-size: 0.85rem; color: var(--gold-bright); }
+.tip-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 0.85rem; }
+.tip-row .pc { width: 44px; height: 34px; flex: none; }
+.tip-row .pc .pc-name, .tip-row .pc .pc-meta { display: none; }
+.tip-row .pc .pc-band { height: 100%; border: 0; }
+.tip-row span { flex: 1; min-width: 0; }
+.set-missing { background: var(--bg-alt); border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; margin: 0 0 10px; font-size: 0.85rem; }
+.set-missing h4 { margin: 0 0 4px; font-size: 0.8rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; }
+
+.status-box small.status-hint { color: #1a6b3d; font-weight: 700; margin-top: 0.5cqw; }
+
+@media (min-width: 901px) and (max-width: 1280px) {
+  .game-body { grid-template-columns: minmax(190px, 240px) minmax(0, 1fr) minmax(190px, 240px); gap: 8px; padding: 6px 8px; }
+  .me-col { padding: 8px; }
+  .grp-row .pc { width: 72px; height: 84px; }
+  .dock-money { font-size: 1.35rem; }
+  .pp-row { padding: 5px 8px; }
+  .dock { height: 100px; min-height: 100px; padding: 6px 10px; }
+  .dock-actions .btn { padding: 8px 12px; font-size: 0.85rem; }
+}

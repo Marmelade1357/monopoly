@@ -246,6 +246,9 @@
   $('btn-add-bot').addEventListener('click', () => socket.emit('addBot'));
   $('btn-fill-bots').addEventListener('click', () => socket.emit('fillBots'));
   $('btn-start').addEventListener('click', () => socket.emit('startGame'));
+  [['set-timer', 'turnTimer'], ['set-limit', 'limit'], ['set-speed', 'speed']].forEach(([id, key]) => {
+    $(id).addEventListener('change', () => socket.emit('setSettings', { [key]: $(id).value }));
+  });
   document.querySelectorAll('#lobby-rules input[data-rule]').forEach((cb) => {
     cb.addEventListener('change', () => socket.emit('setSettings', { rules: { [cb.dataset.rule]: cb.checked } }));
   });
@@ -275,6 +278,7 @@
       ]);
       if (p.isHost) name.appendChild(el('span', { class: 'tag host', text: 'Host' }));
       if (p.isBot) name.appendChild(el('span', { class: 'tag bot', text: 'Bot' }));
+      if (p.isBot && p.persona) name.appendChild(el('span', { class: 'tag persona', text: { careful: '🧐 vorsichtig', bold: '🔥 mutig', trader: '🤝 Händler' }[p.persona] || p.persona }));
       if (!p.connected && !p.isBot) name.appendChild(el('span', { class: 'tag', text: 'offline' }));
       li.appendChild(name);
       if (isHost() && !p.isHost) {
@@ -298,6 +302,11 @@
     $('lobby-settings-display').classList.toggle('hidden', host);
     if (document.activeElement !== $('input-money')) $('input-money').value = s.settings.startMoney;
     $('lobby-settings-display').textContent = `Startkapital: ${fmtM(s.settings.startMoney)}`;
+    [['set-timer', 'turnTimer'], ['set-limit', 'limit'], ['set-speed', 'speed']].forEach(([id, key]) => {
+      const sel = $(id);
+      if (document.activeElement !== sel) sel.value = String(s.settings[key] === undefined ? '' : s.settings[key]);
+      sel.disabled = !host;
+    });
     document.querySelectorAll('#lobby-rules input[data-rule]').forEach((cb) => {
       cb.checked = !!(s.settings.rules && s.settings.rules[cb.dataset.rule]);
       cb.disabled = !host;
@@ -339,6 +348,7 @@
   const sqEls = {};
   let diceEls = null;
   let statusEl = null;
+  let auctionEl = null;
   let cardSlot = null;
 
   function pipsFor(n) {
@@ -401,6 +411,7 @@
     setDie(dieA, 1); setDie(dieB, 1);
     diceEls = [dieA, dieB];
     statusEl = el('div', { class: 'status-box' });
+    auctionEl = el('div', { class: 'auction-panel hidden' });
     cardSlot = el('div', {});
     const center = el('div', { class: 'board-center' }, [
       el('div', { class: 'deck community' }, [el('div', { class: 'di', text: '🐤' }), el('div', { text: 'Tick, Trick & Track' })]),
@@ -408,6 +419,7 @@
       el('div', { class: 'logo' }, [el('div', { class: 'l1', text: 'MONOPOLY' }), el('div', { class: 'l2', text: 'Entenhausen' })]),
       el('div', { class: 'dice-row' }, [dieA, dieB]),
       statusEl,
+      auctionEl,
       cardSlot,
     ]);
     board.appendChild(center);
@@ -455,6 +467,8 @@
   let lastMoveSeq = null;
   let queueRunning = false;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  // Tempo-Regel: im Schnell-Modus laufen alle Animationen schneller.
+  function T(ms) { return ms * (S && S.settings && S.settings.speed === 'fast' ? 0.55 : 1); }
 
   function snapTokens() {
     if (!S || !S.game) return;
@@ -466,16 +480,16 @@
 
   async function jailAnimation(id) {
     const board = $('board');
-    const wrap = el('div', { class: 'jail-anim' }, [
+    const wrap = el('div', { class: 'jail-anim', style: 'position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:30' }, [
       el('div', { class: 'jail-bars' }, Array.from({ length: 9 }, (_, i) => el('i', { style: `--i:${i}` }))),
       el('div', { class: 'jail-text' }, [el('div', { class: 'jail-ico', text: '🚔' }), el('div', { text: `${pname(id)} geht in den Knast!` })]),
     ]);
     board.appendChild(wrap);
     playJailSound();
-    await sleep(1300);
+    await sleep(T(1300));
     shownPos[id] = 10;
     renderTokens();
-    await sleep(1100);
+    await sleep(T(1100));
     wrap.classList.add('out');
     await sleep(400);
     wrap.remove();
@@ -484,16 +498,16 @@
   async function walk(id, from, to, dir) {
     const dist = dir === 1 ? (to - from + 40) % 40 : (from - to + 40) % 40;
     shownPos[id] = from;
-    if (dist === 0 || dist > 16) { shownPos[id] = to; renderTokens(); await sleep(250); return; }
+    if (dist === 0 || dist > 16) { shownPos[id] = to; renderTokens(); await sleep(T(250)); return; }
     renderTokens();
     while (shownPos[id] !== to) {
-      await sleep(230);
+      await sleep(T(230));
       shownPos[id] = (shownPos[id] + dir + 40) % 40;
       hopId = id;
       renderTokens();
       playTone(300 + (shownPos[id] % 10) * 20, 0.05, 0, 0.06, 'triangle');
     }
-    await sleep(350);
+    await sleep(T(350));
     hopId = null;
     renderTokens();
   }
@@ -508,7 +522,7 @@
         const g = S && S.game;
         if (g && g.lastCard && m.card === g.lastCard.seq && m.card !== shownCardSeq) {
           updateCard(g);
-          await sleep(m.kind === 'jail' ? 2600 : 1900);
+          await sleep(T(m.kind === 'jail' ? 2600 : 1900));
         }
         if (m.kind === 'jail') await jailAnimation(m.id);
         else await walk(m.id, m.from, m.to, m.kind === 'back' ? -1 : 1);
@@ -592,7 +606,7 @@
     if (g.rollSeq !== lastRollSeq) {
       lastRollSeq = g.rollSeq;
       playDiceSound();
-      busyUntilDice = Date.now() + 1300;
+      busyUntilDice = Date.now() + T(1300);
       diceEls.forEach((d) => d.classList.add('rolling'));
       clearInterval(rollTimer);
       let n = 0;
@@ -608,13 +622,32 @@
           setDie(diceEls[1], S.game.dice[1]);
           if (S.game.dice[0] === S.game.dice[1]) splash('PASCH!', 'pasch', 1300);
         }
-      }, 90);
+      }, T(90));
     }
   }
 
   // --- Statusbox & Karte ---
 
   function sqName(pos) { return SQUARES[pos].name; }
+
+  // Kurzer Hinweis, was ein Kauf strategisch bedeutet.
+  function buyHint(g, pos, buyer) {
+    const sq = SQUARES[pos];
+    const ps = GROUP_POSITIONS[sq.group] || [];
+    const ownerOf = (x) => { const q = g.props.find((p) => p.pos === x); return q ? q.owner : null; };
+    const others = ps.filter((x) => x !== pos);
+    const mine = others.filter((x) => ownerOf(x) === buyer).length;
+    if (sq.type === 'property') {
+      if (mine === others.length) return '🎉 Damit gehört dir die ganze Farbe – du kannst bauen!';
+      const foreign = others.map(ownerOf);
+      const single = foreign.length && foreign.every((o) => o && o !== buyer && o === foreign[0]);
+      if (single) return `🛡 Kaufen verhindert, dass ${pname(foreign[0])} die ganze Farbe bekommt.`;
+      if (mine > 0) return `👍 ${mine + 1} von ${ps.length} Straßen dieser Farbe wären deine.`;
+      return `${ps.length} Straßen in dieser Farbe – du hättest 1.`;
+    }
+    const n = others.filter((x) => ownerOf(x) === buyer).length;
+    return sq.type === 'station' ? `🚂 Damit besitzt du ${n + 1} von 4 Bahnhöfen (mehr = höhere Miete).` : `Werke: mit beiden zahlen Gegner 10 × Augenzahl.`;
+  }
 
   function statusFor(s) {
     const g = s.game;
@@ -624,7 +657,7 @@
       case 'roll':
         return { t: `${cur} ist am Zug`, sub: g.players[g.turnId].inJail ? 'sitzt im Knast' : (g.doubles ? 'darf nach dem Pasch noch einmal würfeln' : 'würfelt gleich …') };
       case 'buy':
-        return { t: `${cur} überlegt`, sub: `${sqName(g.buy.pos)} für ${fmtM(g.buy.price)} zu kaufen` };
+        return { t: `${cur} überlegt`, sub: `${sqName(g.buy.pos)} für ${fmtM(g.buy.price)} zu kaufen`, hint: buyHint(g, g.buy.pos, g.turnId) };
       case 'auction': {
         const a = g.auction;
         return { t: `🔨 Auktion: ${sqName(a.pos)}`, sub: a.highBidder ? `Höchstgebot ${fmtM(a.highBid)} von ${pname(a.highBidder)} · ${pname(a.bidderId)} ist dran` : `Noch kein Gebot · ${pname(a.bidderId)} ist dran` };
@@ -715,6 +748,7 @@
 
   let feedFirst = null;
   function renderFeed(s) {
+    if (isBusy()) { whenIdle(() => { if (S && S.game) renderFeed(S); }); return; }
     const feed = $('event-feed');
     feed.innerHTML = '';
     const items = s.logs.slice(-6).reverse();
@@ -968,6 +1002,25 @@
     } else ownerLine.textContent = 'Noch frei – gehört der Bank.';
     body.appendChild(ownerLine);
 
+    if (p && p.owner === myId() && sq.type === 'property') {
+      const ps = GROUP_POSITIONS[sq.group];
+      const missing = ps.filter((x) => { const q = propOf(x); return !q || q.owner !== myId(); });
+      if (missing.length) {
+        const box = el('div', { class: 'set-missing' }, [el('h4', { text: `Was fehlt für das ${grp.name}-Set?` })]);
+        missing.forEach((x) => {
+          const q = propOf(x);
+          const row = el('div', { class: 'tip-row' }, [el('span', { text: `${SQUARES[x].name} – ${q ? 'gehört ' + pname(q.owner) : 'noch frei'}` })]);
+          if (q && !q.mortgaged) {
+            const b = el('button', { class: 'btn ghost small', text: '🤝 Anfragen' });
+            b.addEventListener('click', () => { hide($('prop-modal')); propModalPos = null; openTrade(q.owner, { get: [x], giveCash: offerFor(x, missing.length === 1) }); });
+            row.appendChild(b);
+          }
+          box.appendChild(row);
+        });
+        body.appendChild(box);
+      }
+    }
+
     const col = el('div', { class: 'btn-col' });
     const mineNow = p && p.owner === myId();
     const addAction = (label, cls, err, action) => {
@@ -1051,11 +1104,44 @@
     if (!others.length) return toast('Niemand zum Handeln da.');
     draft = {
       to: partnerId && others.includes(partnerId) ? partnerId : others[0],
-      give: { cash: 0, props: new Set((preset && preset.give) || []), cards: 0 },
-      get: { cash: 0, props: new Set((preset && preset.get) || []), cards: 0 },
+      give: { cash: Math.min(me.money, (preset && preset.giveCash) || 0), props: new Set((preset && preset.give) || []), cards: (preset && preset.giveCards) || 0 },
+      get: { cash: (preset && preset.getCash) || 0, props: new Set((preset && preset.get) || []), cards: (preset && preset.getCards) || 0 },
     };
     renderTradeModal();
     show($('trade-modal'));
+  }
+
+  // Vorschläge: Grundstücke des Partners, die mir zu einem Farbset fehlen.
+  function offerFor(pos, completes) {
+    const me = S.game.players[myId()];
+    return Math.min(me.money, Math.ceil((SQUARES[pos].price * (completes ? 1.8 : 1.3)) / 10) * 10);
+  }
+
+  function tradeTips() {
+    const g = S.game;
+    const box = el('div', { class: 'trade-tips' }, [el('h4', { text: '💡 Was fehlt mir bei ' + pname(draft.to) + '?' })]);
+    const tips = [];
+    Object.keys(GROUP_POSITIONS).forEach((gr) => {
+      const ps = GROUP_POSITIONS[gr];
+      const mine = ps.filter((x) => { const q = propOf(x); return q && q.owner === myId(); });
+      if (!mine.length || mine.length === ps.length) return;
+      const theirs = ps.filter((x) => { const q = propOf(x); return q && q.owner === draft.to && !groupHasBuildings(x); });
+      theirs.forEach((pos) => tips.push({ pos, gr, completes: theirs.length === ps.length - mine.length, mine: mine.length, total: ps.length }));
+    });
+    tips.sort((a, b) => Number(b.completes) - Number(a.completes));
+    if (!tips.length) box.appendChild(el('div', { class: 'hint', style: 'margin:0', text: 'Bei dieser Person liegt gerade nichts, was dir zu einem Set fehlt.' }));
+    tips.slice(0, 4).forEach((t) => {
+      const offer = offerFor(t.pos, t.completes);
+      const row = el('div', { class: 'tip-row' }, [
+        propCard(t.pos, { small: true }),
+        el('span', { text: `${SQUARES[t.pos].name} – ${t.completes ? `vervollständigt dein ${GROUPS[t.gr].name}-Set!` : `du hast ${t.mine} von ${t.total} in ${GROUPS[t.gr].name}`}` }),
+      ]);
+      const b = el('button', { class: 'btn ghost small', text: `Anfragen (${fmtM(offer)})` });
+      b.addEventListener('click', () => { draft.get.props = new Set([t.pos]); draft.give.cash = offer; renderTradeModal(); });
+      row.appendChild(b);
+      box.appendChild(row);
+    });
+    return box;
   }
 
   function tradeColumn(title, ownerId, side) {
@@ -1131,6 +1217,7 @@
     body.appendChild(el('label', { class: 'hint', style: 'display:block;margin:0 0 4px', text: 'Handeln mit' }));
     body.appendChild(sel);
 
+    body.appendChild(tradeTips());
     body.appendChild(el('div', { class: 'trade-cols' }, [
       tradeColumn('Du gibst', myId(), draft.give),
       tradeColumn(`${pname(draft.to)} gibt`, draft.to, draft.get),
@@ -1178,17 +1265,59 @@
       return box;
     };
     body.appendChild(el('div', { class: 'trade-cols' }, [side('Du erhältst', t.give), side('Du gibst', t.get)]));
+    const counter = el('button', { class: 'btn secondary', text: '↩ Gegenangebot' });
+    counter.addEventListener('click', () => {
+      act({ type: 'cancelTrade' }, (res) => {
+        if (!res || !res.ok) return;
+        setTimeout(() => openTrade(t.from, { give: t.get.props, giveCash: t.get.cash, giveCards: t.get.cards, get: t.give.props, getCash: t.give.cash, getCards: t.give.cards }), 250);
+      });
+    });
     const no = el('button', { class: 'btn ghost', text: 'Ablehnen' });
     no.addEventListener('click', () => act({ type: 'cancelTrade' }));
     const yes = el('button', { class: 'btn good', text: 'Annehmen' });
     yes.addEventListener('click', () => act({ type: 'acceptTrade' }));
-    body.appendChild(el('div', { class: 'row-btns' }, [no, yes]));
+    body.appendChild(el('div', { class: 'row-btns' }, [no, counter, yes]));
     show(modal);
   }
 
   // ---------------------------------------------------------------------
   // Spielende
   // ---------------------------------------------------------------------
+
+  function statsBlock(g) {
+    const wrap = el('div', {});
+    const ids = g.order;
+    const st = g.stats || {};
+    const cols = [
+      ['💰 Miete kassiert', 'rentIn'], ['💸 Miete gezahlt', 'rentOut'], ['🏠 Gekauft', 'bought'], ['🏗️ Gebaut', 'built'],
+    ];
+    const best = {};
+    cols.forEach(([, k]) => { best[k] = Math.max(...ids.map((id) => (st[id] ? st[id][k] : 0))); });
+    const bestNet = Math.max(...ids.map((id) => g.players[id].netWorth));
+    const awards = el('div', { class: 'awards' });
+    const award = (k, label) => {
+      if (!best[k]) return;
+      const w = ids.filter((id) => st[id] && st[id][k] === best[k]);
+      awards.appendChild(el('span', { class: 'award', text: `${label}: ${w.map(pname).join(', ')}` }));
+    };
+    award('rentIn', '👑 Mietkönig');
+    award('rentOut', '💸 Größter Zahler');
+    award('built', '🏗️ Bauherr');
+    award('bought', '🏠 Sammler');
+    if (g.limitReached) awards.appendChild(el('span', { class: 'award', text: g.limit && g.limit.mode === 'minutes' ? '⏰ Zeit abgelaufen' : '🏁 Rundenlimit erreicht' }));
+    wrap.appendChild(awards);
+    const head = el('tr', {}, [el('th', { text: 'Spieler' })].concat(cols.map(([l]) => el('th', { text: l }))).concat([el('th', { text: 'Vermögen' })]));
+    const rows = (g.ranking || ids).map((id) => {
+      const x = st[id] || { rentIn: 0, rentOut: 0, bought: 0, built: 0 };
+      const tds = [el('td', {}, [tokdot(id, true), document.createTextNode(' ' + pname(id))])];
+      cols.forEach(([, k]) => tds.push(el('td', { class: best[k] && x[k] === best[k] ? 'best' : '', text: k.startsWith('rent') ? fmtM(x[k]) : String(x[k]) })));
+      const gp = g.players[id];
+      tds.push(el('td', { class: gp.netWorth === bestNet ? 'best' : '', text: gp.bankrupt ? 'pleite' : fmtM(gp.netWorth) }));
+      return el('tr', {}, tds);
+    });
+    wrap.appendChild(el('table', { class: 'stats-table' }, [head].concat(rows)));
+    return wrap;
+  }
 
   let overShown = false;
   function renderOver(s) {
@@ -1208,6 +1337,8 @@
       list.appendChild(el('li', {}, [el('b', { text: `${i + 1}.` }), tokdot(id), el('span', { text: pname(id) })]));
     });
     body.appendChild(list);
+    body.appendChild(statsBlock(g));
+    modal.querySelector('.modal-content').classList.add('over-wide');
     if (isHost()) {
       const b = el('button', { class: 'btn primary', text: 'Neue Partie (zurück zur Lobby)' });
       b.addEventListener('click', () => socket.emit('resetGame'));
@@ -1269,7 +1400,7 @@
   }
 
   function floatText(text, rect, cls) {
-    const n = el('div', { class: 'float-text ' + cls, text });
+    const n = el('div', { class: 'float-text ' + cls, text, style: 'position:fixed;pointer-events:none;z-index:500' });
     n.style.left = (rect.left + rect.width / 2) + 'px';
     n.style.top = (rect.top + rect.height / 2) + 'px';
     document.body.appendChild(n);
@@ -1278,7 +1409,7 @@
 
   function flyCoins(from, to, count) {
     for (let i = 0; i < count; i++) {
-      const c = el('div', { class: 'coin', text: '🪙' });
+      const c = el('div', { class: 'coin', text: '🪙', style: 'position:fixed;pointer-events:none;z-index:500' });
       const sx = from.left + from.width / 2 + (Math.random() - 0.5) * 20;
       const sy = from.top + from.height / 2 + (Math.random() - 0.5) * 20;
       const ex = to.left + to.width / 2 + (Math.random() - 0.5) * 20;
@@ -1321,7 +1452,7 @@
   function splash(text, cls, ms) {
     const board = $('board');
     if (!board) return;
-    const n = el('div', { class: 'splash ' + (cls || ''), text });
+    const n = el('div', { class: 'splash ' + (cls || ''), text, style: 'position:absolute;left:50%;top:30%;pointer-events:none;z-index:28' });
     board.appendChild(n);
     setTimeout(() => n.remove(), ms || 1500);
   }
@@ -1343,7 +1474,7 @@
   function confetti() {
     const colors = ['#f4c95d', '#e0342f', '#3ecf8e', '#8fd3f4', '#e0459c', '#f39c34'];
     for (let i = 0; i < 90; i++) {
-      const c = el('i', { class: 'confetti' });
+      const c = el('i', { class: 'confetti', style: 'position:fixed;top:-20px;width:10px;height:16px;pointer-events:none;z-index:600' });
       c.style.left = Math.random() * 100 + 'vw';
       c.style.background = colors[i % colors.length];
       c.style.animationDelay = Math.random() * 1.6 + 's';
@@ -1355,9 +1486,142 @@
   }
 
   // ---------------------------------------------------------------------
+  // Kopfzeile: Runde/Restzeit und Zug-Timer
+  // ---------------------------------------------------------------------
+
+  function updateHeaderInfo() {
+    if (!S || !S.game) return;
+    const g = S.game;
+    const infoEl = $('game-info');
+    let info = '';
+    if (g.phase !== 'over') {
+      if (g.limit && g.limit.mode === 'rounds') info = `Runde ${Math.min(g.round, g.limit.value)}/${g.limit.value}`;
+      else if (g.limit && g.limit.mode === 'minutes') {
+        const rem = Math.max(0, g.limit.endsAt - (Date.now() + clockOffset));
+        info = `⏰ ${Math.floor(rem / 60000)}:${String(Math.floor(rem / 1000) % 60).padStart(2, '0')} · Runde ${g.round}`;
+      } else info = `Runde ${g.round}`;
+    }
+    if (infoEl.textContent !== info) infoEl.textContent = info;
+
+    const badge = $('timer-badge');
+    const bar = $('timer-bar');
+    const t = S.timer;
+    if (!t || g.phase === 'over') { badge.classList.add('hidden'); bar.classList.add('hidden'); return; }
+    const rem = Math.max(0, t.remainingMs - (Date.now() - stateReceivedAt));
+    const secs = Math.ceil(rem / 1000);
+    const mineT = t.actorId === myId();
+    badge.classList.remove('hidden');
+    badge.textContent = `⏱ ${mineT ? '' : pname(t.actorId) + ' '}${secs}s`;
+    badge.classList.toggle('urgent', secs <= 10);
+    badge.classList.toggle('mine', mineT && secs > 10);
+    bar.classList.toggle('hidden', !mineT);
+    bar.classList.toggle('urgent', secs <= 10);
+    bar.firstElementChild.style.width = Math.max(0, Math.min(100, (rem / t.total) * 100)) + '%';
+  }
+  setInterval(updateHeaderInfo, 400);
+
+  // ---------------------------------------------------------------------
+  // Auktion: Panel in der Brettmitte, Hammer bei jedem Gebot
+  // ---------------------------------------------------------------------
+
+  let lastBidCount = 0;
+  let lastAuctionSeq = null;
+  function playHammerSound() { playTone(180, 0.12, 0, 0.25, 'square'); playTone(120, 0.15, 0.06, 0.2, 'square'); }
+
+  function renderAuction(g) {
+    const a = g.auction;
+    const la = g.lastAuction;
+    if (lastAuctionSeq === null) lastAuctionSeq = la ? la.seq : 0;
+    else if (la && la.seq !== lastAuctionSeq) {
+      lastAuctionSeq = la.seq;
+      playHammerSound();
+      splash(`🔨 Zuschlag! ${pname(la.winner)} ersteigert ${SQUARES[la.pos].name} für ${fmtM(la.amount)}`, 'hammer', 2200);
+    }
+    if (g.phase !== 'auction' || !a) { auctionEl.classList.add('hidden'); auctionEl.innerHTML = ''; lastBidCount = 0; return; }
+    const bids = a.bids || [];
+    const hit = bids.length > lastBidCount && bids.length > 0;
+    lastBidCount = bids.length;
+    auctionEl.classList.remove('hidden');
+    auctionEl.innerHTML = '';
+    const price = el('div', { class: 'ap-price' + (hit ? ' hit' : ''), text: a.highBidder ? fmtM(a.highBid) : '–' });
+    const bidders = el('div', { class: 'ap-bidders' });
+    a.order.forEach((id) => {
+      bidders.appendChild(el('span', { class: 'ap-bidder' + (a.passed.includes(id) ? ' passed' : '') + (a.bidderId === id ? ' turn' : '') + (a.highBidder === id ? ' high' : '') }, [tokdot(id, true), document.createTextNode(pname(id) + (a.highBidder === id ? ' 👑' : ''))]));
+    });
+    const last = bids.slice(-3).reverse();
+    auctionEl.appendChild(el('div', { class: 'ap-card' }, [propCard(a.pos, {})]));
+    auctionEl.appendChild(el('div', { class: 'ap-main' }, [
+      el('div', { class: 'ap-title', text: '🔨 Auktion' }),
+      price,
+      el('div', { class: 'ap-sub', text: a.highBidder ? `Höchstgebot von ${pname(a.highBidder)} – ${pname(a.bidderId)} ist dran` : `Noch kein Gebot – ${pname(a.bidderId)} ist dran (ab ${fmtM(a.minBid)})` }),
+      bidders,
+      last.length ? el('div', { class: 'ap-bids' }, last.map((b) => el('span', { text: `${pname(b.id)} bot ${fmtM(b.amount)}` }))) : null,
+    ]));
+    if (hit) {
+      auctionEl.appendChild(el('div', { class: 'ap-hammer', text: '🔨' }));
+      playHammerSound();
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // Ereignisse beim Landen (Miete, Steuer) und Pleite-Szene
+  // ---------------------------------------------------------------------
+
+  let eventSeen = null;
+  const eventQueue = [];
+  let eventRunning = false;
+
+  function showEvent(e) {
+    const board = $('board');
+    let children;
+    if (e.kind === 'rent') {
+      children = [propCard(e.pos, { small: true }), el('div', { class: 'ev-text' }, [document.createTextNode(`${pname(e.payer)} zahlt ${fmtM(e.amount)} Miete`), el('small', { text: `an ${pname(e.owner)} für ${SQUARES[e.pos].name}` })])];
+    } else {
+      children = [el('span', { text: '💸' }), el('div', { class: 'ev-text' }, [document.createTextNode(`${pname(e.payer)} zahlt ${fmtM(e.amount)}`), el('small', { text: SQUARES[e.pos].name })])];
+    }
+    const n = el('div', { class: 'splash event', style: 'position:absolute;left:50%;top:68%;pointer-events:none;z-index:27' }, children);
+    board.appendChild(n);
+    setTimeout(() => n.remove(), T(2500));
+  }
+
+  async function runEvents() {
+    eventRunning = true;
+    while (eventQueue.length) {
+      await new Promise((r) => whenIdle(r));
+      showEvent(eventQueue.shift());
+      await sleep(T(2600));
+    }
+    eventRunning = false;
+  }
+
+  function handleEvents(g) {
+    const ev = g.events || [];
+    const max = ev.length ? ev[ev.length - 1].seq : 0;
+    if (eventSeen === null) { eventSeen = max; return; }
+    ev.filter((e) => e.seq > eventSeen).forEach((e) => eventQueue.push(e));
+    eventSeen = Math.max(eventSeen, max);
+    if (!eventRunning && eventQueue.length) runEvents();
+  }
+
+  let prevBankrupt = null;
+  function handleBust(g) {
+    if (prevBankrupt === null) { prevBankrupt = {}; g.order.forEach((id) => { prevBankrupt[id] = g.players[id].bankrupt; }); return; }
+    g.order.forEach((id) => {
+      if (g.players[id].bankrupt && !prevBankrupt[id]) {
+        whenIdle(() => {
+          splash(`💥 ${pname(id)} ist pleite!`, 'bust', 2400);
+          [330, 262, 196, 131].forEach((f, i) => playTone(f, 0.22, i * 0.18, 0.2, 'sawtooth'));
+        });
+      }
+      prevBankrupt[id] = g.players[id].bankrupt;
+    });
+  }
+
+  // ---------------------------------------------------------------------
   // Gesamt-Rendering
   // ---------------------------------------------------------------------
 
+  let clockOffset = 0;
   let boardBuilt = false;
   let notifiedTurnKey = null;
 
@@ -1380,6 +1644,7 @@
     statusEl.innerHTML = '';
     statusEl.appendChild(document.createTextNode(st.t));
     if (st.sub) statusEl.appendChild(el('small', { text: st.sub }));
+    if (st.hint) statusEl.appendChild(el('small', { class: 'status-hint', text: st.hint }));
 
     const pk = document.querySelector('.sq-parking');
     if (pk) {
@@ -1387,6 +1652,9 @@
       pk.textContent = on ? `Jackpot: ${g.pot} ₮` : 'Kleine Pause';
       pk.classList.toggle('sq-pot', !!on);
     }
+    renderAuction(g);
+    handleEvents(g);
+    handleBust(g);
     trackMoney(g);
     renderPlayersPanel(s);
     renderFeed(s);
@@ -1394,6 +1662,7 @@
     renderDockMe(s);
     renderDockProps(s);
     renderDockActions(s);
+    updateHeaderInfo();
     renderIncomingTrade(s);
     renderOver(s);
     if (propModalPos !== null && !$('prop-modal').classList.contains('hidden')) renderPropModal();
@@ -1414,7 +1683,7 @@
     if (S.phase === 'lobby') {
       closeAllModals();
       boardBuilt = false;
-      lastRollSeq = null; shownCardSeq = null; lastMoveSeq = null; moveQueue.length = 0; boardOwnersInit = false; feedFirst = null; turnKeySeen = null; Object.keys(realMoney).forEach((k) => { delete realMoney[k]; delete dispMoney[k]; }); dockKey = ''; overShown = false; tradeInId = null;
+      lastRollSeq = null; shownCardSeq = null; lastMoveSeq = null; moveQueue.length = 0; boardOwnersInit = false; feedFirst = null; eventSeen = null; eventQueue.length = 0; prevBankrupt = null; lastAuctionSeq = null; lastBidCount = 0; turnKeySeen = null; Object.keys(realMoney).forEach((k) => { delete realMoney[k]; delete dispMoney[k]; }); dockKey = ''; overShown = false; tradeInId = null;
       Object.keys(shownPos).forEach((k) => delete shownPos[k]);
       showScreen('screen-lobby');
       renderLobby(S);
@@ -1449,6 +1718,7 @@
   socket.on('gameState', (state) => {
     S = state;
     stateReceivedAt = Date.now();
+    clockOffset = state.now ? state.now - Date.now() : 0;
     if (!session) return; // Zustand eines fremden Raums ignorieren
     render();
   });

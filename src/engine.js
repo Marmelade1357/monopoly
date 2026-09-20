@@ -153,10 +153,18 @@ function initGame(room) {
     lastCard: null,
     cardSeq: 0,
     lastMove: null,
+    moves: [],
     moveSeq: 0,
     winner: null,
     placements: [],
     turnCount: 0,
+    round: 1,
+    startedAt: Date.now(),
+    stats: {},
+    events: [],
+    eventSeq: 0,
+    lastAuction: null,
+    limitReached: false,
     forcedDice: null,
   };
   ids.forEach((id) => {
@@ -166,6 +174,7 @@ function initGame(room) {
     g.jailTurns[id] = 0;
     g.jailCards[id] = [];
     g.bankrupt[id] = false;
+    g.stats[id] = { rentIn: 0, rentOut: 0, taxes: 0, bought: 0, built: 0 };
   });
   room.g = g;
   log(room, `Das Spiel beginnt – jede Person startet mit ${fmt(start)}.`);
@@ -186,11 +195,47 @@ function nextTurn(room) {
   const g = room.g;
   if (checkWinner(room)) return;
   const n = g.order.length;
+  const oldIdx = g.turnIdx;
   for (let i = 1; i <= n; i++) {
     const idx = (g.turnIdx + i) % n;
     if (!g.bankrupt[g.order[idx]]) { g.turnIdx = idx; break; }
   }
+  if (g.turnIdx <= oldIdx) g.round++;
+  if (limitReached(room)) { finishByLimit(room); return; }
   beginTurn(room);
+}
+
+// Spielende nach Zeit oder Runden (Hausregel in der Lobby): "none", "m60" (Minuten), "r30" (Runden).
+function limitOf(room) {
+  const m = /^([mr])(\d+)$/.exec(String((room.settings && room.settings.limit) || 'none'));
+  return m ? { mode: m[1] === 'm' ? 'minutes' : 'rounds', value: Number(m[2]) } : null;
+}
+
+function limitReached(room) {
+  const lim = limitOf(room);
+  const g = room.g;
+  if (!lim) return false;
+  if (lim.mode === 'minutes') return Date.now() - g.startedAt >= lim.value * 60000;
+  return g.round > lim.value;
+}
+
+function finishByLimit(room) {
+  const g = room.g;
+  const left = alive(room).slice().sort((a, b) => netWorth(room, b) - netWorth(room, a));
+  g.phase = 'over';
+  g.limitReached = true;
+  g.winner = left[0] || null;
+  room.phase = 'gameover';
+  g.ranking = left.concat(g.placements.slice().reverse());
+  const lim = limitOf(room);
+  log(room, `⏰ ${lim.mode === 'minutes' ? `Die Spielzeit von ${lim.value} Minuten ist um` : `${lim.value} Runden sind gespielt`} – ${g.winner ? nameOf(room, g.winner) : 'niemand'} ist am reichsten und gewinnt!`);
+}
+
+function recordEvent(g, e) {
+  e.seq = ++g.eventSeq;
+  e.move = g.moveSeq;
+  g.events.push(e);
+  if (g.events.length > 8) g.events.shift();
 }
 
 function checkWinner(room) {
@@ -293,13 +338,23 @@ function proceed(room) {
 // Bewegung und Landen
 // ---------------------------------------------------------------------------
 
+// Jede Bewegung wird protokolliert, damit die Clients sie nacheinander zeigen
+// können (erst zum Feld laufen, Karte/Knast-Animation, dann der Sprung).
+function recordMove(g, m) {
+  m.seq = ++g.moveSeq;
+  m.card = g.cardSeq;
+  g.lastMove = m;
+  g.moves.push(m);
+  if (g.moves.length > 12) g.moves.shift();
+}
+
 function movePlayer(room, id, steps, ctx) {
   const g = room.g;
   const from = g.pos[id];
   const raw = from + steps;
   const to = ((raw % 40) + 40) % 40;
   g.pos[id] = to;
-  g.lastMove = { id, from, to, kind: steps >= 0 ? 'steps' : 'back', seq: ++g.moveSeq };
+  recordMove(g, { id, from, to, kind: steps >= 0 ? 'steps' : 'back' });
   if (steps > 0 && raw >= 40) {
     const bonus = rule(room, 'doubleGo') && to === 0;
     const sum = bonus ? GO_SALARY * 2 : GO_SALARY;
@@ -313,7 +368,7 @@ function advanceTo(room, id, pos, ctx) {
   const g = room.g;
   const from = g.pos[id];
   g.pos[id] = pos;
-  g.lastMove = { id, from, to: pos, kind: 'steps', seq: ++g.moveSeq };
+  recordMove(g, { id, from, to: pos, kind: 'steps' });
   if (pos < from) {
     const bonus = rule(room, 'doubleGo') && pos === 0;
     const sum = bonus ? GO_SALARY * 2 : GO_SALARY;
@@ -331,7 +386,7 @@ function sendToJail(room, id) {
   g.jailTurns[id] = 0;
   g.doubles = 0;
   g.next = 'end';
-  g.lastMove = { id, from, to: JAIL_POS, kind: 'jail', seq: ++g.moveSeq };
+  recordMove(g, { id, from, to: JAIL_POS, kind: 'jail' });
   log(room, `🚔 ${nameOf(room, id)} landet im Panzerknacker-Knast!`);
 }
 
@@ -375,10 +430,14 @@ function landOn(room, id, ctx) {
       if (p.mortgaged) { log(room, `${nameOf(room, id)} landet auf ${sq.name} – beliehen, keine Miete.`); return; }
       if (!rule(room, 'jailRent') && g.inJail[p.owner]) { log(room, `${nameOf(room, id)} landet auf ${sq.name} – ${nameOf(room, p.owner)} sitzt im Knast, keine Miete.`); return; }
       const rent = computeRent(room, sq, ctx);
+      g.stats[id].rentOut += rent; g.stats[p.owner].rentIn += rent;
+      recordEvent(g, { kind: 'rent', payer: id, owner: p.owner, pos: sq.pos, amount: rent });
       pay(room, id, p.owner, rent, `Miete für ${sq.name}`);
       return;
     }
     case 'tax':
+      g.stats[id].taxes += sq.amount;
+      recordEvent(g, { kind: 'tax', payer: id, pos: sq.pos, amount: sq.amount });
       pay(room, id, null, sq.amount, sq.name);
       return;
     case 'parking':
@@ -563,6 +622,7 @@ function buy(room, id) {
   if (g.money[id] < sq.price) return fail('Dafür reicht dein Geld nicht.');
   transfer(room, id, null, sq.price);
   g.props[sq.pos] = { owner: id, houses: 0, mortgaged: false };
+  g.stats[id].bought++;
   g.buy = null;
   log(room, `🏠 ${nameOf(room, id)} kauft ${sq.name} für ${fmt(sq.price)}.`);
   proceed(room);
@@ -593,7 +653,7 @@ function startAuction(room, pos) {
     const id = g.order[(g.turnIdx + i) % n];
     if (!g.bankrupt[id]) order.push(id);
   }
-  g.auction = { pos, order, idx: 0, highBid: 0, highBidder: null, passed: [], minBid: MIN_BID };
+  g.auction = { pos, order, idx: 0, highBid: 0, highBidder: null, passed: [], minBid: MIN_BID, bids: [] };
   log(room, `🔨 Auktion für ${SQUARES[pos].name} (Mindestgebot ${fmt(MIN_BID)}).`);
   auctionNext(room);
 }
@@ -629,6 +689,8 @@ function finishAuction(room) {
   if (a.highBidder) {
     transfer(room, a.highBidder, null, a.highBid);
     g.props[a.pos] = { owner: a.highBidder, houses: 0, mortgaged: false };
+    g.stats[a.highBidder].bought++;
+    g.lastAuction = { seq: (g.lastAuction ? g.lastAuction.seq : 0) + 1, pos: a.pos, winner: a.highBidder, amount: a.highBid };
     log(room, `🔨 ${nameOf(room, a.highBidder)} ersteigert ${sq.name} für ${fmt(a.highBid)}.`);
   } else {
     log(room, `Niemand bietet – ${sq.name} bleibt bei der Bank.`);
@@ -650,6 +712,7 @@ function bid(room, id, amount) {
   if (amount > g.money[id]) return fail('Du hast nicht genug Geld für dieses Gebot.');
   a.highBid = amount;
   a.highBidder = id;
+  a.bids.push({ id, amount });
   log(room, `${nameOf(room, id)} bietet ${fmt(amount)}.`);
   a.idx = (a.idx + 1) % a.order.length;
   auctionNext(room);
@@ -711,6 +774,7 @@ function build(room, id, pos) {
   const cost = GROUPS[sq.group].houseCost;
   transfer(room, id, null, cost);
   p.houses++;
+  g.stats[id].built++;
   if (p.houses === 5) { g.housesLeft += 4; g.hotelsLeft--; } else g.housesLeft--;
   log(room, `🏗️ ${nameOf(room, id)} baut auf ${sq.name} ${p.houses === 5 ? 'ein Hotel' : 'ein Haus'} (${fmt(cost)}).`);
   return ok();
@@ -1056,12 +1120,20 @@ function snapshot(room) {
       passed: g.auction.passed,
       order: g.auction.order,
       minBid: g.auction.minBid,
+      bids: g.auction.bids,
     },
+    lastAuction: g.lastAuction,
     debts: g.debts,
     trade: g.trade,
     lastCard: g.lastCard,
     lastMove: g.lastMove,
+    moves: g.moves,
     winner: g.winner,
+    round: g.round,
+    stats: g.stats,
+    events: g.events,
+    limit: (function () { const l = limitOf(room); return l ? { mode: l.mode, value: l.value, endsAt: l.mode === 'minutes' ? g.startedAt + l.value * 60000 : null } : null; })(),
+    limitReached: g.limitReached,
     ranking: g.ranking || null,
     turnCount: g.turnCount,
   };
