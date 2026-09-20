@@ -68,6 +68,7 @@
   function hide(e) { e.classList.add('hidden'); }
   function fmtM(n) { return Number(n).toLocaleString('de-DE') + ' ₮'; }
   // Weiche Trennstellen für lange Feldnamen (sonst werden sie auf dem Brett abgeschnitten).
+  const longest = (n) => Math.max(...soft(n).split(/[\s\u00AD-]+/).map((w) => w.length));
   const HYPH = {};
   ['Küken|weg', 'Feder|straße', 'Gänse|markt', 'Enten|teich', 'Bruch|bude', 'Schrott|platz', 'Glücks|wiese', 'Schnatter|straße', 'Erfinder|allee', 'Düsen|triebs', 'Kraft|werk',
     'Fiesel|schweif', 'Rathaus|platz', 'Bürger|meister|allee', 'Enten|markt', 'Quack|straße', 'Gold|gräber|straße', 'Klon|dike', 'Boule|vard', 'Banken|viertel', 'Geld|speicher',
@@ -359,6 +360,7 @@
   const sqEls = {};
   let diceEls = null;
   let statusEl = null;
+  let infoEl = null;
   let auctionEl = null;
   let cardSlot = null;
 
@@ -387,13 +389,13 @@
       if (sq.type === 'property') {
         div.appendChild(el('div', { class: 'band', style: `--band:${GROUPS[sq.group].color}` }));
         div.appendChild(el('div', { class: 'sq-body' }, [
-          el('div', { class: 'sq-name', text: soft(sq.name) }),
+          el('div', { class: 'sq-name' + (longest(sq.name) > 8 ? ' long' : ''), text: soft(sq.name) }),
           el('div', { class: 'sq-price', text: sq.price + ' ₮' }),
         ]));
       } else if (sq.type === 'station' || sq.type === 'utility') {
         div.appendChild(el('div', { class: 'sq-body' }, [
           el('div', { class: 'sq-icon', text: sq.icon || SQ_ICONS.station }),
-          el('div', { class: 'sq-name', text: soft(sq.name) }),
+          el('div', { class: 'sq-name' + (longest(sq.name) > 8 ? ' long' : ''), text: soft(sq.name) }),
           el('div', { class: 'sq-price', text: sq.price + ' ₮' }),
         ]));
       } else {
@@ -404,7 +406,7 @@
         if (sq.type === 'parking') sub = 'Kleine Pause';
         div.appendChild(el('div', { class: 'sq-body' }, [
           el('div', { class: 'sq-icon', text: SQ_ICONS[sq.type] || '' }),
-          el('div', { class: 'sq-name', text: soft(sq.name) }),
+          el('div', { class: 'sq-name' + (longest(sq.name) > 8 ? ' long' : ''), text: soft(sq.name) }),
           sub ? el('div', { class: 'sq-price' + (sq.type === 'parking' ? ' sq-parking' : ''), text: sub }) : null,
         ]));
       }
@@ -424,6 +426,7 @@
     setDie(dieA, 1); setDie(dieB, 1);
     diceEls = [dieA, dieB];
     statusEl = el('div', { class: 'status-box' });
+    infoEl = el('div', { class: 'center-info' }, [el('div', { class: 'ci-pills' }), el('div', { class: 'ci-last' })]);
     auctionEl = el('div', { class: 'auction-panel hidden' });
     cardSlot = el('div', {});
     const center = el('div', { class: 'board-center' }, [
@@ -432,6 +435,7 @@
       el('div', { class: 'logo' }, [el('div', { class: 'l1', text: 'MONOPOLY' }), el('div', { class: 'l2', text: 'Entenhausen' })]),
       el('div', { class: 'dice-row' }, [dieA, dieB]),
       statusEl,
+      infoEl,
       auctionEl,
       cardSlot,
     ]);
@@ -509,8 +513,15 @@
     if (sq.group && GROUPS[sq.group]) tipEl.appendChild(el('i', { style: `background:${GROUPS[sq.group].color}` }));
     tipEl.appendChild(el('b', { text: sq.name }));
     if (sub) tipEl.appendChild(el('small', { text: sub }));
-    tipEl.style.left = Math.min(window.innerWidth - 240, x + 14) + 'px';
-    tipEl.style.top = (y + 16) + 'px';
+    if (sq.rent && sq.rent.length) {
+      const cur = pr ? (sq.type === 'property' ? pr.houses : -1) : -2;
+      const labels = sq.type === 'property' ? ['Miete', '1 🏠', '2 🏠', '3 🏠', '4 🏠', 'Hotel'] : ['1 Bahnhof', '2 Bahnhöfe', '3 Bahnhöfe', '4 Bahnhöfe'];
+      const tbl = el('div', { class: 'tip-rent' });
+      sq.rent.forEach((r, i) => tbl.appendChild(el('span', { class: i === cur ? 'cur' : '', text: `${labels[i]}: ${r} ₮` })));
+      tipEl.appendChild(tbl);
+    }
+    tipEl.style.left = Math.min(window.innerWidth - 320, x + 14) + 'px';
+    tipEl.style.top = Math.min(window.innerHeight - 170, y + 16) + 'px';
     tipEl.classList.remove('hidden');
   }
   function sync3d() {
@@ -906,6 +917,7 @@
     const known = feedFirst;
     items.forEach((l, i) => feed.appendChild(el('li', { text: l.text, class: known !== null && i === 0 && l.text !== known ? 'fresh' : '' })));
     feedFirst = items.length ? items[0].text : '';
+    if (infoEl) infoEl.querySelector('.ci-last').textContent = feedFirst ? '💬 ' + feedFirst : '';
   }
 
   function renderLogModal() {
@@ -1851,6 +1863,16 @@
     if (st.sub) statusEl.appendChild(el('small', { text: st.sub }));
     if (st.hint) statusEl.appendChild(el('small', { class: 'status-hint', text: st.hint }));
 
+    if (infoEl) {
+      const pills = infoEl.querySelector('.ci-pills');
+      const items = [];
+      if (g.rules && g.rules.freeParking) items.push(['💰', `Jackpot ${g.pot} ₮`]);
+      items.push(['🏠', `${g.housesLeft} Häuser`], ['🏨', `${g.hotelsLeft} Hotels`]);
+      if (g.limit && g.limit.mode === 'rounds') items.push(['🏁', `Runde ${Math.min(g.round, g.limit.value)}/${g.limit.value}`]);
+      else items.push(['🔄', `Runde ${g.round}`]);
+      pills.innerHTML = '';
+      items.forEach(([i, t]) => pills.appendChild(el('span', { class: 'ci-pill' }, [el('i', { text: i }), document.createTextNode(t)])));
+    }
     const pk = document.querySelector('.sq-parking');
     if (pk) {
       const on = g.rules && g.rules.freeParking;

@@ -628,17 +628,12 @@ function slotFor(pos, idx, n, jailed) {
   if (jailed) { x += r.w * 0.16; z -= r.d * 0.16; }
   else if (n > 1) {
     const corner = r.w > 1.2;
-    if (corner) {
-      const a = (idx / n) * Math.PI * 2 + 0.6;
-      const rad = n === 2 ? 0.36 : 0.5;
-      x += Math.cos(a) * rad; z += Math.sin(a) * rad;
-    } else {
-      const cols = n <= 2 ? n : 3;
-      const row = Math.floor(idx / cols), col = idx % cols;
-      const inRow = Math.min(cols, n - row * cols);
-      x += (col - (inRow - 1) / 2) * 0.34;
-      z += (row - (Math.ceil(n / cols) - 1) / 2) * 0.4;
-    }
+    const cols = corner ? (n <= 2 ? n : 3) : (n <= 2 ? n : 3);
+    const gap = corner ? 0.56 : (n <= 2 ? 0.46 : 0.34);
+    const row = Math.floor(idx / cols), col = idx % cols;
+    const inRow = Math.min(cols, n - row * cols);
+    x += (col - (inRow - 1) / 2) * gap;
+    z += (row - (Math.ceil(n / cols) - 1) / 2) * (corner ? 0.5 : 0.42);
   }
   return new THREE.Vector3(x, TOP + 0.005, z);
 }
@@ -662,8 +657,8 @@ function layoutTokens(view, animate) {
     seen[p.pos] = (seen[p.pos] || 0) + 1;
     const jailed = p.inJail && p.pos === 10;
     const dest = slotFor(p.pos, seen[p.pos] - 1, counts[p.pos], jailed);
-    tk.spriteDX = counts[p.pos] > 1 ? (seen[p.pos] - 1 - (counts[p.pos] - 1) / 2) * 0.16 : 0;
-    tk.crowd = counts[p.pos] > 2 ? 0.82 : 1;
+    tk.spriteDX = 0;
+    { const nn = counts[p.pos], cc = tileMeshes[p.pos].rect.w > 1.2; tk.crowd = nn === 1 ? 1 : nn === 2 ? 0.82 : (cc && nn <= 4 ? 0.72 : 0.62); }
     if (jailed || !p.inJail) tk.fxCage = false;
     tk.cage.visible = jailed || tk.fxCage;
     if (jailed && tk.cage.position.y !== 0) tk.cage.position.y = 0;
@@ -979,8 +974,8 @@ export function showCard(c) {
 // ---------------------------------------------------------------- Licht (Tag / Abend)
 
 const LIGHTS = {
-  day: { hemiC: 0xfff4e0, hemiG: 0x7a5a3a, hemiI: 0.55, sunC: 0xffe0b4, sunI: 2.5, sunP: [-7, 14, 9], fillC: 0x9db8ff, fillI: 0.5, lampI: 0, env: 0.32, exp: 1.0 },
-  evening: { hemiC: 0xffc890, hemiG: 0x3a2a4a, hemiI: 0.4, sunC: 0xff9a55, sunI: 1.7, sunP: [-12, 6.5, 9], fillC: 0x6e86ff, fillI: 0.75, lampI: 26, env: 0.2, exp: 0.95 },
+  day: { hemiC: 0xfff4e0, hemiG: 0x7a5a3a, hemiI: 0.55, sunC: 0xffe0b4, sunI: 2.5, sunP: [-7, 14, 9], fillC: 0x9db8ff, fillI: 0.5, lampI: 0, env: 0.32, exp: 1.0, poolO: 0.16, candle: 0 },
+  evening: { hemiC: 0xffc890, hemiG: 0x4a3226, hemiI: 0.62, sunC: 0xffa860, sunI: 2.0, sunP: [-12, 6.5, 9], fillC: 0x7a8cff, fillI: 0.6, lampI: 46, env: 0.26, exp: 1.08, poolO: 0.5, candle: 1 },
 };
 function applyLight(mode, instant) {
   lightMode = mode === 'evening' ? 'evening' : 'day';
@@ -994,6 +989,8 @@ function applyLight(mode, instant) {
     lights.sun.position.set(...from.sunP.map((v, i) => v + (to.sunP[i] - v) * k));
     lights.fill.color.copy(col(from.fillC).lerp(col(to.fillC), k)); lights.fill.intensity = from.fillI + (to.fillI - from.fillI) * k;
     lights.lamp.intensity = from.lampI + (to.lampI - from.lampI) * k;
+    lights.candleK = from.candle + (to.candle - from.candle) * k;
+    if (lights.pool) lights.pool.material.opacity = from.poolO + (to.poolO - from.poolO) * k;
     if (scene) scene.environmentIntensity = from.env + (to.env - from.env) * k;
     if (renderer) renderer.toneMappingExposure = from.exp + (to.exp - from.exp) * k;
   };
@@ -1003,6 +1000,46 @@ function applyLight(mode, instant) {
 }
 export function setLightMode(m) { applyLight(m, false); }
 
+
+// ---------------------------------------------------------------- Tisch-Deko
+function poolTexture() {
+  const cv = document.createElement('canvas'); cv.width = cv.height = 256;
+  const c = cv.getContext('2d');
+  const g = c.createRadialGradient(128, 128, 10, 128, 128, 128);
+  g.addColorStop(0, 'rgba(255,214,150,1)'); g.addColorStop(0.45, 'rgba(255,190,120,0.45)'); g.addColorStop(1, 'rgba(255,170,90,0)');
+  c.fillStyle = g; c.fillRect(0, 0, 256, 256);
+  return new THREE.CanvasTexture(cv);
+}
+function buildDeco() {
+  const Y = -0.361;
+  const pool = new THREE.Mesh(new THREE.PlaneGeometry(30, 30), new THREE.MeshBasicMaterial({ map: poolTexture(), transparent: true, opacity: 0.16, blending: THREE.AdditiveBlending, depthWrite: false }));
+  pool.rotation.x = -Math.PI / 2; pool.position.y = Y + 0.004; pool.renderOrder = 1;
+  scene.add(pool);
+  lights.pool = pool;
+  // Kerze (hinten links)
+  const wax = new THREE.MeshStandardMaterial({ color: 0xf3ead2, roughness: 0.7 });
+  const candle = new THREE.Group(); candle.position.set(-9.4, Y, -6.2);
+  mk(new THREE.CylinderGeometry(0.42, 0.46, 0.08, 24), new THREE.MeshStandardMaterial({ color: 0x8a6a2f, metalness: 0.6, roughness: 0.35 }), 0, 0.04, 0, candle);
+  mk(new THREE.CylinderGeometry(0.17, 0.19, 0.85, 20), wax, 0, 0.5, 0, candle);
+  mk(new THREE.CylinderGeometry(0.012, 0.012, 0.12, 6), new THREE.MeshStandardMaterial({ color: 0x222222 }), 0, 1.0, 0, candle);
+  const flame = new THREE.Mesh(new THREE.SphereGeometry(0.075, 12, 10), new THREE.MeshBasicMaterial({ color: 0xffb347 }));
+  flame.scale.set(1, 1.9, 1); flame.position.y = 1.12; candle.add(flame);
+  const cl = new THREE.PointLight(0xffb060, 0, 14, 1.5); cl.position.set(0, 1.2, 0); candle.add(cl);
+  scene.add(candle);
+  lights.candle = cl; lights.flame = flame; lights.candleK = 0;
+  // Untersetzer + Glas (vorne links)
+  const cg = new THREE.Group(); cg.position.set(-9.2, Y, 6.6);
+  mk(new THREE.CylinderGeometry(0.48, 0.48, 0.04, 28), new THREE.MeshStandardMaterial({ color: 0xc9a06a, roughness: 0.9 }), 0, 0.02, 0, cg);
+  mk(new THREE.CylinderGeometry(0.34, 0.28, 0.75, 28), new THREE.MeshPhysicalMaterial({ color: 0xffd9a0, transparent: true, opacity: 0.4, roughness: 0.05, clearcoat: 1 }), 0, 0.42, 0, cg);
+  mk(new THREE.CylinderGeometry(0.31, 0.26, 0.38, 28), new THREE.MeshStandardMaterial({ color: 0xd0761c, transparent: true, opacity: 0.85, roughness: 0.2 }), 0, 0.25, 0, cg);
+  scene.add(cg);
+  // Kartenstapel (vorne rechts)
+  const stack = new THREE.Group(); stack.position.set(9.1, Y, 6.6); stack.rotation.y = 0.5;
+  const back = new THREE.MeshStandardMaterial({ color: 0x2f5fa8, roughness: 0.7 });
+  for (let i = 0; i < 6; i++) { const b = mk(new THREE.BoxGeometry(0.9, 0.025, 1.3), back, 0, 0.0125 + i * 0.027, 0, stack); b.rotation.y = (i % 3 - 1) * 0.05; }
+  scene.add(stack);
+}
+
 // ---------------------------------------------------------------- Kamera & Schleife
 
 function fitDistance() {
@@ -1011,7 +1048,7 @@ function fitDistance() {
   camera.updateProjectionMatrix();
   const el = (elevDeg * Math.PI) / 180;
   const dir = new THREE.Vector3(0, Math.sin(el), Math.cos(el));
-  const corners = [[-1, -1], [1, -1], [-1, 1], [1, 1]].map(([x, z]) => new THREE.Vector3(x * (S / 2 + (handsOn ? 2.25 : 0.4)), 0, z * (S / 2 + (handsOn ? 2.25 : 0.4))));
+  const corners = [[-1, -1], [1, -1], [-1, 1], [1, 1]].map(([x, z]) => new THREE.Vector3(x * (S / 2 + (handsOn ? 1.35 : 0.4)), 0, z * (S / 2 + (handsOn ? 1.35 : 0.4))));
   let lo = 6, hi = 80;
   const tmp = camera.clone();
   for (let i = 0; i < 18; i++) {
@@ -1094,28 +1131,45 @@ function tick() {
   }
   const activeId = viewState.turnId;
   Object.values(tokens).forEach((tk) => {
+    const active = tk.id === activeId;
+    tk.act = (tk.act === undefined ? 1 : tk.act) + ((active ? 1.2 : 1) - (tk.act === undefined ? 1 : tk.act)) * Math.min(1, dt * 6);
+    const m = 1.25 * (tk.crowd || 1) * tk.act;
+    tk.ring.scale.setScalar(m / 0.95);
     if (tk.tw) {
       tk.tw.t += dt;
       const k = Math.min(1, tk.tw.t / tk.tw.dur);
       const e = k;
       tk.group.position.lerpVectors(tk.tw.from, tk.tw.to, e);
       tk.group.position.y = TOP + 0.005 + Math.sin(k * Math.PI) * tk.tw.h;
-      tk.pawn.scale.set(0.95 * (tk.crowd || 1), 0.95 * (tk.crowd || 1) * (k > 0.9 ? 0.86 + (1 - k) * 1.4 : 1), 0.95 * (tk.crowd || 1));
-      if (k >= 1) { tk.group.position.copy(tk.tw.to); tk.tw = null; tk.pawn.scale.setScalar(0.95 * (tk.crowd || 1)); }
+      tk.pawn.scale.set(m, m * (k > 0.9 ? 0.86 + (1 - k) * 1.4 : 1), m);
+      if (k >= 1) { tk.group.position.copy(tk.tw.to); tk.tw = null; tk.pawn.scale.setScalar(m); }
     } else {
-      tk.pawn.scale.setScalar(0.95 * (tk.crowd || 1));
+      tk.pawn.scale.setScalar(m);
     }
-    const active = tk.id === activeId;
     tk.ring.visible = active;
     tk.arrow.visible = active && !tk.tw;
-    if (active) { tk.arrow.position.y = 1.85 + Math.sin(pulse * 3.2) * 0.1; tk.arrow.rotation.y += dt * 2.2; }
+    if (active) { tk.arrow.position.y = 1.55 * m + 0.4 + Math.sin(pulse * 3.2) * 0.1; tk.arrow.rotation.y += dt * 2.2; }
     // Staubwölkchen beim Laufen
     if (tk.tw) { tk.puff = (tk.puff || 0) + dt; if (tk.puff > 0.07) { tk.puff = 0; dust(tk); } }
-    if (active) { tk.ring.material.opacity = 0.55 + Math.sin(pulse * 5) * 0.35; const s = 1 + Math.sin(pulse * 5) * 0.08; tk.ring.scale.set(s, s, s); if (!tk.tw) tk.pawn.position.y = Math.abs(Math.sin(pulse * 3)) * 0.06; }
+    if (active) { tk.ring.material.opacity = 0.55 + Math.sin(pulse * 5) * 0.35; const s = (1 + Math.sin(pulse * 5) * 0.08) * m / 0.95; tk.ring.scale.set(s, s, s); if (!tk.tw) tk.pawn.position.y = Math.abs(Math.sin(pulse * 3)) * 0.06; }
     else tk.pawn.position.y = 0;
     tk.sprite.position.x += ((tk.spriteDX || 0) - tk.sprite.position.x) * 0.15;
-    tk.sprite.position.y = 1.32 + (active ? Math.sin(pulse * 3 + tk.bob) * 0.06 : 0);
+    tk.sprite.position.y = 1.4 * m + (active ? Math.sin(pulse * 3 + tk.bob) * 0.06 : 0);
   });
+  Object.keys(handScale).forEach((id) => {
+    const st = handScale[id];
+    if (!st.inner) return;
+    const target = (handHover === id || handPinned === id) ? 1 : st.coll;
+    st.cur += (target - st.cur) * Math.min(1, dt * 8);
+    st.inner.scale.setScalar(st.cur * st.base);
+  });
+  if (lights && lights.candle) {
+    const ck = lights.candleK || 0;
+    const fl = 0.85 + Math.sin(pulse * 17) * 0.08 + Math.sin(pulse * 29.3) * 0.06;
+    lights.candle.intensity = 14 * ck * fl;
+    lights.flame.visible = ck > 0.05;
+    lights.flame.scale.set(fl, 1.9 * fl, fl);
+  }
   decks.forEach((d) => { d.position.y = d.userData.base + Math.sin(pulse * 1.4 + d.userData.phase) * 0.05; });
 
   if (cardObj && cardObj.hover && !cardObj.leaving) {
@@ -1208,6 +1262,8 @@ export function init(opts) {
   scene.add(table);
 
   buildBoard();
+  buildDeco();
+  applyLight(lightMode, true);
   addModels();
   buildDice();
 
@@ -1233,13 +1289,16 @@ export function init(opts) {
     const hit = pick(e);
     if (!hit) return;
     if (hit.card) { dismissCard(); return; }
+    if (hit.hid) handPinned = (e.pointerType === 'touch' && handPinned !== hit.hid) ? hit.hid : (e.pointerType === 'touch' ? null : handPinned);
+    else handPinned = null;
     if (hit.token) O.onToken && O.onToken(hit.token); else if (hit.pos !== undefined) O.onTile && O.onTile(hit.pos);
   });
-  canvas.addEventListener('pointerleave', () => { if (hoverPos !== null) { tileMeshes[hoverPos].topMat.emissive.setHex(0x000000); hoverPos = null; } O.onHover && O.onHover(null); });
+  canvas.addEventListener('pointerleave', () => { handHover = null; if (hoverPos !== null) { tileMeshes[hoverPos].topMat.emissive.setHex(0x000000); hoverPos = null; } O.onHover && O.onHover(null); });
   canvas.addEventListener('pointermove', (e) => {
     if (e.pointerType === 'touch') return;
     const hit = pick(e);
     const p = hit && hit.pos !== undefined ? hit.pos : null;
+    handHover = hit && hit.hid ? hit.hid : null;
     O.onHover && O.onHover(p, e.clientX, e.clientY);
     if (p !== hoverPos) {
       if (hoverPos !== null) tileMeshes[hoverPos].topMat.emissive.setHex(0x000000);
@@ -1269,7 +1328,7 @@ function pick(e) {
   if (ph && ph.object.userData.tid) return { token: ph.object.userData.tid };
   if (handsGroup && handsGroup.visible) {
     const hh = raycaster.intersectObjects(handMeshes, false)[0];
-    if (hh && hh.object.userData.pos !== undefined) return { pos: hh.object.userData.pos };
+    if (hh) return hh.object.userData.pos !== undefined ? { pos: hh.object.userData.pos, hid: hh.object.userData.hid } : { hid: hh.object.userData.hid };
   }
   const th = raycaster.intersectObjects(tileMeshes.map((t) => t.top), false)[0];
   if (th) return { pos: th.object.userData.pos };
@@ -1292,9 +1351,11 @@ export function setVisible(v) {
 
 
 // --- Kartenhände: eigene Karten vorne (LOS-Seite), die der anderen an den übrigen Seiten ---
+const handScale = {};
+let handHover = null, handPinned = null;
 let handsOn = true, handsGroup = null, handMeshes = [], handKey = '', handSeen = new Set();
 const handTexCache = new Map();
-const HAND_R0 = S / 2 + 0.5, HAND_W = 1.1, HAND_H = 0.62, HAND_STEP = 0.24;
+const HAND_R0 = S / 2 + 0.45, HAND_W = 1.1, HAND_H = 0.62, HAND_STEP = 0.24;
 const SEATS = { 1: ['N'], 2: ['W', 'E'], 3: ['W', 'N', 'E'], 4: ['W', 'N', 'N', 'E'], 5: ['W', 'N', 'N', 'E', 'E'] };
 const SEAT_ROT = { S: 0, W: -Math.PI / 2, N: Math.PI, E: Math.PI / 2 };
 
@@ -1382,49 +1443,60 @@ function updateHands(view) {
   const order = Object.keys(O.GROUPS);
   const seen = new Set();
   const cardMat = (map) => new THREE.MeshStandardMaterial({ map, roughness: 0.85, metalness: 0 });
+  const live = new Set();
   seats.forEach(({ seat, slot, of, h }) => {
     const g = new THREE.Group();
     g.rotation.y = SEAT_ROT[seat];
     const width = (S - 0.4) / of;
     const cx = of === 1 ? 0 : (slot - (of - 1) / 2) * (S / of);
-    // Spalten nach Farbgruppe
+    const inner = new THREE.Group();
+    inner.position.set(cx, 0, HAND_R0);
+    g.add(inner);
     const cols = [];
     order.forEach((gk) => {
       const list = h.cards.filter((c) => O.SQUARES[c.pos].group === gk).sort((a, b) => a.pos - b.pos);
       if (list.length) cols.push(list.map((c) => ({ sq: O.SQUARES[c.pos], c })));
     });
     if (h.jail) cols.push(Array.from({ length: h.jail }, () => ({ jail: true })));
-    const colW = Math.min(HAND_W + 0.05, (width - 0.1) / Math.max(1, cols.length));
-    const cw = colW * 0.94;
-    const scale = cw / HAND_W;
+    const colW = HAND_W + 0.05;
+    const isMine = h === mine;
+    const base = Math.min(isMine ? 1.25 : 0.95, (width - 0.1) / (Math.max(1, cols.length) * colW));
+    const tagW = Math.min(2.8, (width - 0.1) / base), tagH = tagW * 96 / 512;
+    const z0 = tagH + 0.1;
     let maxStack = 1;
     cols.forEach((col, ci) => {
       maxStack = Math.max(maxStack, col.length);
-      const x0 = cx + (ci - (cols.length - 1) / 2) * colW;
+      const x0 = (ci - (cols.length - 1) / 2) * colW;
       col.forEach((it, k) => {
         const map = it.jail ? handJailTex() : handCardTex(it.sq, it.c.houses, it.c.mortgaged);
-        const m = new THREE.Mesh(new THREE.PlaneGeometry(cw, HAND_H * scale), cardMat(map));
+        const m = new THREE.Mesh(new THREE.PlaneGeometry(HAND_W, HAND_H), cardMat(map));
         m.rotation.x = -Math.PI / 2;
-        m.position.set(x0, -0.35 + k * 0.006, HAND_R0 + (HAND_H * scale) / 2 + k * HAND_STEP * scale);
+        m.position.set(x0, -0.35 + k * 0.006, z0 + HAND_H / 2 + k * HAND_STEP);
         m.receiveShadow = true; m.castShadow = true;
-        if (!it.jail) { m.userData.pos = it.sq.pos; handMeshes.push(m); }
+        m.userData.hid = h.id;
+        if (!it.jail) m.userData.pos = it.sq.pos;
+        handMeshes.push(m);
         const id = it.jail ? `${h.id}:jail${k}` : `${h.id}:${it.sq.pos}`;
         seen.add(id);
         if (!firstUpdate && handSeen.size && !handSeen.has(id) && !it.jail) {
           m.scale.setScalar(0.01);
           tweens.push({ t: 0, dur: 0.6, fn: (kk) => { m.scale.setScalar(Math.max(0.01, 1 - Math.pow(1 - Math.min(1, kk), 3) * 0.99)); }, done: () => m.scale.setScalar(1) });
         }
-        g.add(m);
+        inner.add(m);
       });
     });
-    // Namensschild vor dem Kartenfächer
-    const tagW = Math.min(2.6, width * 0.6), tagH = tagW * 96 / 512;
     const tag = new THREE.Mesh(new THREE.PlaneGeometry(tagW, tagH), new THREE.MeshBasicMaterial({ map: handTagTex(h, view.turnId === h.id), transparent: true }));
-    tag.rotation.x = -Math.PI / 2; tag.userData.tag = true;
-    tag.position.set(cx, -0.345, HAND_R0 + HAND_H * scale + (maxStack - 1) * HAND_STEP * scale + 0.06 + tagH / 2 + 0.12);
-    g.add(tag);
+    tag.rotation.x = -Math.PI / 2; tag.userData.tag = true; tag.userData.hid = h.id;
+    tag.position.set(0, -0.345, tagH / 2);
+    handMeshes.push(tag);
+    inner.add(tag);
     handsGroup.add(g);
+    live.add(h.id);
+    const st = handScale[h.id] || (handScale[h.id] = { cur: 0.001 });
+    st.inner = inner; st.base = base; st.coll = isMine ? 0.8 : 0.6;
+    inner.scale.setScalar(st.cur * base);
   });
+  Object.keys(handScale).forEach((k) => { if (!live.has(k)) delete handScale[k]; });
   handSeen = seen;
 }
 

@@ -218,7 +218,8 @@ input:focus, select:focus { outline: 2px solid var(--accent-bright); }
   position: relative;
   display: flex;
   border: 1px solid var(--board-line);
-  background: #dcefdf;
+  background: linear-gradient(160deg, #e8f5ea 0%, #d6eadb 60%, #cbe2d0 100%);
+  box-shadow: inset 0 0.15cqw 0 rgba(255,255,255,0.7), inset 0 -0.2cqw 0.3cqw rgba(0,60,30,0.12);
   overflow: hidden;
   line-height: 1.12;
   cursor: pointer;
@@ -252,8 +253,8 @@ input:focus, select:focus { outline: 2px solid var(--accent-bright); }
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   text-align: center; padding: 0.2cqw 0.25cqw; gap: 0.15cqw; min-width: 0;
 }
-.sq .sq-name { font-weight: 800; font-size: 1.25cqw; overflow-wrap: anywhere; word-break: normal; hyphens: manual; line-height: 1.1; }
-.sq .sq-price { font-size: 1.2cqw; color: #2b4636; }
+.sq .sq-name { font-weight: 800; font-size: 1.4cqw; text-shadow: 0 0 0.35cqw rgba(255,255,255,0.95), 0 0 0.7cqw rgba(255,255,255,0.8); overflow-wrap: anywhere; word-break: normal; hyphens: manual; line-height: 1.1; }
+.sq .sq-price { font-size: 1.25cqw; color: #2b4636; text-shadow: 0 0 0.35cqw rgba(255,255,255,0.9); }
 .sq .sq-icon { font-size: 2.6cqw; line-height: 1; }
 .sq.corner .sq-icon { font-size: 3.4cqw; }
 .sq.corner .sq-name { font-size: 1.45cqw; }
@@ -284,7 +285,7 @@ input:focus, select:focus { outline: 2px solid var(--accent-bright); }
 }
 .tokens .tk + .tk { margin-left: -0.6cqw; }
 .tk {
-  width: 3.6cqw; height: 3.6cqw; border-radius: 50%;
+  width: 3.4cqw; height: 3.4cqw; border-radius: 50%;
   background: #fff; border: 0.25cqw solid var(--pc, #888);
   display: flex; align-items: center; justify-content: center;
   font-size: 2.4cqw; line-height: 1;
@@ -572,7 +573,7 @@ input:focus, select:focus { outline: 2px solid var(--accent-bright); }
 .game-header .build-id { margin: 0; }
 @media (min-width: 901px) {
   /* feste Höhe: wechselnde Aktionen dürfen das Spielfeld nie verschieben */
-  .dock { height: 112px; min-height: 112px; overflow-y: auto; }
+  .dock { height: 84px; min-height: 84px; overflow-y: auto; }
 }
 @media (max-width: 900px) { .game-header .build-id { display: none; } }
 
@@ -644,7 +645,7 @@ input:focus, select:focus { outline: 2px solid var(--accent-bright); }
   .grp-row .pc { width: 72px; height: 84px; }
   .dock-money { font-size: 1.35rem; }
   .pp-row { padding: 5px 8px; }
-  .dock { height: 100px; min-height: 100px; padding: 6px 10px; }
+  .dock { height: 78px; min-height: 78px; padding: 6px 10px; }
   .dock-actions .btn { padding: 8px 12px; font-size: 0.85rem; }
 }
 
@@ -670,7 +671,7 @@ input:focus, select:focus { outline: 2px solid var(--accent-bright); }
 .board.mode3d .center-card { display: none; }
 
 .board3d-canvas { transition: opacity 0.35s ease; }
-.tip3d { position: fixed; z-index: 200; pointer-events: none; background: rgba(12,24,18,0.95); color: #fff; border: 1px solid rgba(255,255,255,0.25); border-radius: 10px; padding: 7px 12px; display: flex; flex-direction: column; gap: 2px; box-shadow: 0 6px 20px rgba(0,0,0,0.5); max-width: 240px; }
+.tip3d { position: fixed; z-index: 200; pointer-events: none; background: rgba(12,24,18,0.95); color: #fff; border: 1px solid rgba(255,255,255,0.25); border-radius: 10px; padding: 7px 12px; display: flex; flex-direction: column; gap: 2px; box-shadow: 0 6px 20px rgba(0,0,0,0.5); max-width: 300px; min-width: 190px; }
 .tip3d.hidden { display: none; }
 .tip3d i { display: block; height: 6px; border-radius: 3px; margin-bottom: 3px; }
 .tip3d b { font-size: 15px; }
@@ -707,3 +708,19 @@ input:focus, select:focus { outline: 2px solid var(--accent-bright); }
 @media (max-width: 900px) { #btn-panels, .vol { display: none !important; } }
 
 #btn-hands3d.off { opacity: 0.55; }
+.tip3d .tip-rent { display: grid; grid-template-columns: 1fr 1fr; gap: 1px 10px; margin-top: 5px; font-size: 12px; opacity: 0.9; }
+.tip3d .tip-rent .cur { color: #ffd54f; font-weight: 700; }
+
+/* Brettmitte: Infos */
+.center-info { z-index: 2; display: flex; flex-direction: column; align-items: center; gap: 0.8cqw; max-width: 50cqw; }
+.ci-pills { display: flex; flex-wrap: wrap; justify-content: center; gap: 0.7cqw; }
+.ci-pill { display: inline-flex; align-items: center; gap: 0.5cqw; background: rgba(255,255,255,0.7); border: 1px solid rgba(0,0,0,0.2); border-radius: 2cqw; padding: 0.4cqw 1.2cqw; font-size: 1.35cqw; font-weight: 700; color: #16301f; }
+.ci-pill i { font-style: normal; }
+.ci-last { font-size: 1.3cqw; color: #35503f; text-align: center; line-height: 1.25; min-height: 1.6cqw; }
+.board.mode3d .center-info { display: none; }
+
+/* kompaktere Seitenleiste und Dock */
+.me-col:has(.dock-props .empty) { align-self: start; }
+.dock { padding: 6px 12px; min-height: 52px; }
+.dock-actions .btn { padding: 8px 14px; }
+.sq .sq-name.long { font-size: 1.15cqw; }
