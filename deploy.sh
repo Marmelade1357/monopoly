@@ -11,10 +11,13 @@
 set -e  # bei jedem Fehler sofort abbrechen
 
 echo "==> Hole neuesten Stand von GitHub ..."
-git pull
+git pull --ff-only
 
-echo "==> Baue und starte Container neu ..."
+echo "==> Baue und starte Container neu (laufende Partien werden dabei beendet, die Clients verbinden sich neu) ..."
 docker compose up -d --build
+
+echo "==> Räume alte Images auf ..."
+docker image prune -f >/dev/null
 
 echo "==> Fertig. Aktueller Status:"
 docker compose ps

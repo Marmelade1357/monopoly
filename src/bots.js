@@ -109,7 +109,9 @@ function evalTrade(room, id, t) {
     const breaksSet = sq.group && E.ownsAllInGroup(g, id, sq.group) && sq.group !== 'utility' && sq.group !== 'station';
     if (breaksSet && !breaks) breaks = p;
     if (!breaksSet && sq.group && sq.group !== 'utility' && sq.group !== 'station' && E.countOwned(g, id, sq.group) >= Math.ceil(GROUP_POSITIONS[sq.group].length / 2) && !needs) needs = p;
-    return s + sq.price * (breaksSet ? 3 : 1.15);
+    const other = t.to === id ? t.from : t.to;
+    const giftsSet = !breaksSet && sq.group && sq.group !== 'utility' && sq.group !== 'station' && completesSet(g, other, p);
+    return s + sq.price * (breaksSet ? 3 : giftsSet ? 2.2 : 1.15);
   }, 0) + theirs.cards * 60;
   return { receives, gives, breaks, needs };
 }
@@ -118,6 +120,8 @@ function decideTrade(room, id) {
   const g = room.g;
   const t = g.trade;
   const { receives, gives, breaks, needs } = evalTrade(room, id, t);
+  const paying = t.to === id ? t.get.cash : t.give.cash;
+  if (paying > 0 && g.money[id] - paying < 150) return { type: 'cancelTrade', reason: 'Dafür habe ich gerade zu wenig Geld.' };
   if (receives > 0 && receives >= gives * persona(room, id).tradeAccept) return { type: 'acceptTrade' };
   let reason;
   if (breaks !== null) reason = 'Dafür müsste ich mein Farbset aufgeben.';
@@ -136,7 +140,7 @@ function suggestTrade(room, from, to) {
   if (!g || from === to || g.bankrupt[from] || g.bankrupt[to]) return { ok: false, error: 'Kein Vorschlag möglich.' };
   const toBot = !!(room.players.find((p) => p.id === to) || {}).isBot;
   const need = toBot ? persona(room, to).tradeAccept * 1.03 : 1.15;
-  const fair = (t) => { const e = evalTrade(room, to, t); return e.receives > 0 && e.receives >= e.gives * need; };
+  const fair = (t) => { const e = evalTrade(room, to, t); if (toBot && t.get.cash > 0 && g.money[to] - t.get.cash < 150) return false; return e.receives > 0 && e.receives >= e.gives * need; };
   const side = (cash, props) => ({ cash, props: props || [], cards: 0 });
   const tradeable = (pos) => SQUARES[pos].type === 'property' || SQUARES[pos].type === 'station' || SQUARES[pos].type === 'utility';
   const mineIn = (pos) => (SQUARES[pos].group ? E.countOwned(g, from, SQUARES[pos].group) : 0);

@@ -40,6 +40,7 @@
     if (!soundOn || masterVol <= 0) return;
     try {
       if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === 'suspended') audioCtx.resume();
       const t0 = audioCtx.currentTime + (delay || 0);
       const osc = audioCtx.createOscillator();
       const gain = audioCtx.createGain();
@@ -53,6 +54,8 @@
       osc.stop(t0 + duration + 0.02);
     } catch (e) { /* Web Audio nicht verfügbar */ }
   }
+  document.addEventListener('pointerdown', () => { try { if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)(); if (audioCtx.state === 'suspended') audioCtx.resume(); } catch (e) { /* kein Audio */ } }, { passive: true });
+  function escH(v) { return String(v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
   function playDiceSound() { for (let i = 0; i < 6; i++) playTone(200 + Math.random() * 200, 0.05, i * 0.07, 0.1, 'square'); }
   function playTurnSound() { playTone(660, 0.1, 0, 0.14); playTone(880, 0.12, 0.1, 0.14); }
   function playCardSound() { playTone(440, 0.08, 0, 0.12); playTone(587, 0.12, 0.08, 0.12); }
@@ -212,10 +215,21 @@
     });
   });
 
+  function resetClientState() {
+    resetAnimState();
+    lastRollSeq = null; shownCardSeq = null; lastMoveSeq = null; boardOwnersInit = false; feedFirst = null; eventSeen = null; prevBankrupt = null; lastAuctionSeq = null; lastBidCount = 0; turnKeySeen = null; tradeReplySeen = null; notifiedTurnKey = null;
+    Object.keys(realMoney).forEach((k) => { delete realMoney[k]; delete dispMoney[k]; });
+    Object.keys(shownPos).forEach((k) => delete shownPos[k]);
+    dockKey = ''; overShown = false; tradeInId = null; boardBuilt = false;
+    clearInterval(rollTimer);
+    if (b3) { try { b3.dispose(); } catch (e) { /* egal */ } b3 = null; }
+  }
+
   function leaveToHome() {
     socket.emit('leaveRoom');
     clearSession();
     S = null;
+    resetClientState();
     closeAllModals();
     showScreen('screen-home');
   }
@@ -411,8 +425,8 @@
         ]));
       }
       div.appendChild(el('div', { class: 'tokens' }));
-      div.addEventListener('mousemove', (e) => showTip3d(sq.pos, e.clientX, e.clientY));
-      div.addEventListener('mouseleave', () => showTip3d(null));
+      div.addEventListener('pointermove', (e) => { if (e.pointerType === 'mouse') showTip3d(sq.pos, e.clientX, e.clientY); });
+      div.addEventListener('pointerleave', () => showTip3d(null));
       div.addEventListener('click', () => {
         if (sq.type === 'property' || sq.type === 'station' || sq.type === 'utility') openProp(sq.pos);
       });
@@ -615,6 +629,7 @@
   const moveQueue = [];
   let lastMoveSeq = null;
   let queueRunning = false;
+  let epoch = 0;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   // Tempo-Regel: im Schnell-Modus laufen alle Animationen schneller.
   function T(ms) { return ms * (S && S.settings && S.settings.speed === 'fast' ? 0.55 : 1); }
@@ -627,7 +642,7 @@
 
   function playJailSound() { [220, 165, 110].forEach((f, i) => playTone(f, 0.18, i * 0.16, 0.2, 'square')); }
 
-  async function jailAnimation(id) {
+  async function jailAnimation(id, ep) {
     const board = $('board');
     const wrap = el('div', { class: 'jail-anim', style: 'position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:30' }, [
       el('div', { class: 'jail-bars' }, Array.from({ length: 9 }, (_, i) => el('i', { style: `--i:${i}` }))),
@@ -636,55 +651,76 @@
     board.appendChild(wrap);
     if (b3 && mode3d) b3.jailFx(id);
     playJailSound();
-    await sleep(T(1300));
-    shownPos[id] = 10;
-    renderTokens();
-    await sleep(T(1100));
-    wrap.classList.add('out');
-    await sleep(400);
-    wrap.remove();
+    try {
+      await sleep(T(1300));
+      if (ep !== epoch) return;
+      shownPos[id] = 10;
+      renderTokens();
+      await sleep(T(1100));
+      wrap.classList.add('out');
+      await sleep(400);
+    } finally { wrap.remove(); }
   }
 
-  async function walk(id, from, to, dir) {
+  async function walk(id, from, to, dir, ep) {
+    if (!Number.isInteger(from) || !Number.isInteger(to)) return;
     const dist = dir === 1 ? (to - from + 40) % 40 : (from - to + 40) % 40;
     shownPos[id] = from;
     if (dist === 0 || dist > 16) { shownPos[id] = to; renderTokens(); await sleep(T(250)); return; }
     renderTokens();
-    while (shownPos[id] !== to) {
+    for (let guard = 0; shownPos[id] !== to && guard < 42; guard++) {
       await sleep(T(230));
+      if (ep !== epoch) return;
       shownPos[id] = (shownPos[id] + dir + 40) % 40;
       hopId = id;
       renderTokens();
       playTone(300 + (shownPos[id] % 10) * 20, 0.05, 0, 0.06, 'triangle');
     }
     await sleep(T(350));
+    if (ep !== epoch) return;
     hopId = null;
     renderTokens();
   }
 
+  function resetAnimState() {
+    epoch++;
+    walking.clear();
+    queueRunning = false;
+    hopId = null;
+    moveQueue.length = 0;
+    eventQueue.length = 0;
+    busyUntilDice = 0;
+  }
+
   async function runQueue() {
+    const ep = epoch;
     queueRunning = true;
     walking.add('queue');
     try {
       while (moveQueue.length) {
         const m = moveQueue.shift();
         await sleep(Math.max(0, busyUntilDice - Date.now()));
+        if (ep !== epoch) return;
         const g = S && S.game;
         if (g && g.lastCard && m.card === g.lastCard.seq && m.card !== shownCardSeq) {
           updateCard(g);
           await sleep(T(m.kind === 'jail' ? 2600 : 1900));
+          if (ep !== epoch) return;
         }
-        if (m.kind === 'jail') await jailAnimation(m.id);
+        if (m.kind === 'jail') await jailAnimation(m.id, ep);
         else {
-          await walk(m.id, m.from, m.to, m.kind === 'back' ? -1 : 1);
+          await walk(m.id, m.from, m.to, m.kind === 'back' ? -1 : 1, ep);
+          if (ep !== epoch) return;
           if (m.kind === 'steps' && m.to < m.from && b3 && mode3d) b3.confettiAt(0, false);
         }
       }
     } finally {
-      walking.delete('queue');
-      queueRunning = false;
-      snapTokens();
-      refreshAfterIdle();
+      if (ep === epoch) {
+        walking.delete('queue');
+        queueRunning = false;
+        snapTokens();
+        refreshAfterIdle();
+      }
     }
   }
 
@@ -772,6 +808,7 @@
       clearInterval(rollTimer);
       let n = 0;
       rollTimer = setInterval(() => {
+        if (!S || !S.game) { clearInterval(rollTimer); return; }
         n++;
         if (n < 12) {
           setDie(diceEls[0], 1 + Math.floor(Math.random() * 6));
@@ -821,7 +858,7 @@
         return { t: `${cur} überlegt`, sub: `${sqName(g.buy.pos)} für ${fmtM(g.buy.price)} zu kaufen`, hint: buyHint(g, g.buy.pos, g.turnId) };
       case 'auction': {
         const a = g.auction;
-        return { t: `🔨 Auktion: ${sqName(a.pos)}`, sub: a.highBidder ? `Höchstgebot ${fmtM(a.highBid)} von ${pname(a.highBidder)} · ${pname(a.bidderId)} ist dran` : `Noch kein Gebot · ${pname(a.bidderId)} ist dran` };
+        return { t: `🔨 Auktion: ${sqName(a.pos)}`, sub: a.highBidder ? `Höchstgebot ${fmtM(a.highBid)} von ${escH(pname(a.highBidder))} · ${escH(pname(a.bidderId))} ist dran` : `Noch kein Gebot · ${escH(pname(a.bidderId))} ist dran` };
       }
       case 'debt': {
         const d = g.debts[0];
@@ -1043,6 +1080,7 @@
     act({ type: 'endTurn' });
   }
 
+  let dockBusyShown = false;
   function renderDockActions(s) {
     const g = s.game;
     const id = myId();
@@ -1050,7 +1088,8 @@
     const box = $('dock-actions');
     const waited = s.wait ? s.wait.elapsedMs + (Date.now() - stateReceivedAt) : 0;
     const canSkip = !!(s.wait && isHost() && !s.wait.ids.includes(id) && waited >= SKIP_MIN_WAIT_MS);
-    if (isBusy()) {
+    dockBusyShown = isBusy();
+    if (dockBusyShown) {
       box.innerHTML = '';
       box.appendChild(el('span', { class: 'msg', text: '🎲 …' }));
       dockKey = '';
@@ -1103,7 +1142,7 @@
       const sq = SQUARES[a.pos];
       if (a.bidderId === id) {
         const { minRaise, opts } = bidButtons(a, me.money);
-        msg(`🔨 <b>${sq.name}</b> – ${a.highBidder ? `Höchstgebot ${fmtM(a.highBid)} (${pname(a.highBidder)})` : 'noch kein Gebot'}. Du bist dran:`);
+        msg(`🔨 <b>${sq.name}</b> – ${a.highBidder ? `Höchstgebot ${fmtM(a.highBid)} (${escH(pname(a.highBidder))})` : 'noch kein Gebot'}. Du bist dran:`);
         opts.forEach((v) => btn(fmtM(v), 'secondary', () => act({ type: 'bid', amount: v })));
         const input = el('input', { class: 'bid-input', type: 'number', min: minRaise, max: me.money, placeholder: `ab ${minRaise}` });
         if (bidDraft) input.value = bidDraft;
@@ -1113,13 +1152,13 @@
         btn('Passen', '', () => { bidDraft = null; act({ type: 'passBid' }); });
       } else {
         const passed = a.passed.includes(id);
-        msg(`🔨 Auktion: <b>${sq.name}</b> – ${a.highBidder ? `Höchstgebot ${fmtM(a.highBid)} von ${pname(a.highBidder)}` : 'noch kein Gebot'}. ${passed ? 'Du hast gepasst.' : `${pname(a.bidderId)} ist dran.`}`);
+        msg(`🔨 Auktion: <b>${sq.name}</b> – ${a.highBidder ? `Höchstgebot ${fmtM(a.highBid)} von ${escH(pname(a.highBidder))}` : 'noch kein Gebot'}. ${passed ? 'Du hast gepasst.' : `${escH(pname(a.bidderId))} ist dran.`}`);
       }
     } else if (g.phase === 'debt') {
       const mine = g.debts.filter((d) => d.from === id);
       if (mine.length) {
         const total = mine.reduce((sum, d) => sum + d.amount, 0);
-        const to = mine[0].to ? pname(mine[0].to) : 'die Bank';
+        const to = mine[0].to ? escH(pname(mine[0].to)) : 'die Bank';
         msg(`💸 Du schuldest <b>${fmtM(total)}</b> (${to}). Verkaufe Gebäude oder beleihe Grundstücke – oder gib auf.`);
         const rb = btn('🏳️ Aufgeben', 'danger', () => {
           if (rb.dataset.ask) { act({ type: 'resign' }); return; }
@@ -1127,13 +1166,13 @@
           setTimeout(() => { rb.dataset.ask = ''; rb.textContent = '🏳️ Aufgeben'; }, 3500);
         });
       } else {
-        msg(`Warte auf ${g.debts.map((d) => pname(d.from)).filter((v, i, a) => a.indexOf(v) === i).join(', ')} – Schulden begleichen …`);
+        msg(`Warte auf ${g.debts.map((d) => escH(pname(d.from))).filter((v, i, a) => a.indexOf(v) === i).join(', ')} – Schulden begleichen …`);
       }
     } else if (g.phase === 'end' && mineTurn) {
       msg('Zug gespielt – du kannst noch bauen, handeln oder Hypotheken verwalten.');
       btn('✅ Zug beenden', 'good', () => endTurnAsk(g));
     } else {
-      msg(`Warte auf <b>${pname(g.turnId)}</b> …`);
+      msg(`Warte auf <b>${escH(pname(g.turnId))}</b> …`);
     }
 
     if (bopts.length && (g.phase === 'roll' || g.phase === 'end')) {
@@ -1145,7 +1184,7 @@
     // Immer verfügbar
     if (g.phase !== 'auction') {
       if (g.trade && g.trade.from === id) {
-        msg(`🤝 Angebot an ${pname(g.trade.to)} wartet auf Antwort.`);
+        msg(`🤝 Angebot an ${escH(pname(g.trade.to))} wartet auf Antwort.`);
         btn('Zurückziehen', 'ghost small', () => act({ type: 'cancelTrade' }));
       } else if (!g.trade) {
         btn('🤝 Handeln', 'ghost', () => openTrade());
@@ -1434,8 +1473,9 @@
     sugBtn.title = 'Ein faires Angebot für diese Person vorschlagen lassen';
     sugBtn.addEventListener('click', () => {
       sugBtn.disabled = true;
-      socket.emit('suggestTrade', { to: draft.to }, (res) => {
-        if (!draft) return;
+      const sugTo = draft.to;
+      socket.emit('suggestTrade', { to: sugTo }, (res) => {
+        if (!draft || draft.to !== sugTo) return;
         if (!res || !res.ok) { draft.note = (res && res.error) || 'Kein Vorschlag möglich.'; renderTradeModal(); return; }
         draft.give = { cash: res.give.cash, props: new Set(res.give.props), cards: res.give.cards || 0 };
         draft.get = { cash: res.get.cash, props: new Set(res.get.props), cards: res.get.cards || 0 };
@@ -1795,7 +1835,7 @@
     auctionEl.appendChild(el('div', { class: 'ap-main' }, [
       el('div', { class: 'ap-title', text: '🔨 Auktion' }),
       price,
-      el('div', { class: 'ap-sub', text: a.highBidder ? `Höchstgebot von ${pname(a.highBidder)} – ${pname(a.bidderId)} ist dran` : `Noch kein Gebot – ${pname(a.bidderId)} ist dran (ab ${fmtM(a.minBid)})` }),
+      el('div', { class: 'ap-sub', text: a.highBidder ? `Höchstgebot von ${escH(pname(a.highBidder))} – ${escH(pname(a.bidderId))} ist dran` : `Noch kein Gebot – ${escH(pname(a.bidderId))} ist dran (ab ${fmtM(a.minBid)})` }),
       bidders,
       last.length ? el('div', { class: 'ap-bids' }, last.map((b) => el('span', { text: `${pname(b.id)} bot ${fmtM(b.amount)}` }))) : null,
     ]));
@@ -1851,12 +1891,15 @@
 
   async function runEvents() {
     eventRunning = true;
-    while (eventQueue.length) {
-      await new Promise((r) => whenIdle(r));
-      showEvent(eventQueue.shift());
-      await sleep(T(2600));
-    }
-    eventRunning = false;
+    const ep = epoch;
+    try {
+      while (eventQueue.length) {
+        await new Promise((r) => whenIdle(r));
+        if (ep !== epoch) break;
+        try { showEvent(eventQueue.shift()); } catch (e) { console.error(e); }
+        await sleep(T(2600));
+      }
+    } finally { eventRunning = false; }
   }
 
   function handleEvents(g) {
@@ -1969,10 +2012,7 @@
     if (!S) return;
     if (S.phase === 'lobby') {
       closeAllModals();
-      if (b3) { b3.dispose(); b3 = null; }
-      boardBuilt = false;
-      lastRollSeq = null; shownCardSeq = null; lastMoveSeq = null; moveQueue.length = 0; boardOwnersInit = false; feedFirst = null; eventSeen = null; eventQueue.length = 0; prevBankrupt = null; lastAuctionSeq = null; lastBidCount = 0; turnKeySeen = null; Object.keys(realMoney).forEach((k) => { delete realMoney[k]; delete dispMoney[k]; }); dockKey = ''; overShown = false; tradeInId = null;
-      Object.keys(shownPos).forEach((k) => delete shownPos[k]);
+      resetClientState();
       showScreen('screen-lobby');
       renderLobby(S);
     } else if (S.game) {
@@ -1986,11 +2026,12 @@
   // ---------------------------------------------------------------------
 
   socket.on('connect', () => {
-    const saved = loadSession();
+    const banner = $('conn-banner'); if (banner) banner.remove();
+    const saved = loadSession() || session;
     if (saved && saved.code && (saved.token || saved.spectator)) {
       session = saved;
       socket.emit('joinRoom', { code: saved.code, name: saved.name, token: saved.token }, (res) => {
-        if (!res.ok) {
+        if (!res || !res.ok) {
           clearSession();
           S = null;
           showScreen('screen-home');
@@ -2004,6 +2045,13 @@
     }
   });
 
+  socket.on('disconnect', () => {
+    if (!session || $('conn-banner')) return;
+    const b = el('div', { id: 'conn-banner', role: 'alert', style: 'position:fixed;left:50%;top:8px;transform:translateX(-50%);z-index:9999;background:#b3261e;color:#fff;padding:8px 16px;border-radius:999px;font:600 14px system-ui,sans-serif;box-shadow:0 4px 14px rgba(0,0,0,.4)', text: '📡 Verbindung getrennt – verbinde neu …' });
+    document.body.appendChild(b);
+  });
+  socket.on('serverRestart', () => toast('Der Server startet neu – gleich geht es weiter.'));
+
   socket.on('gameState', (state) => {
     S = state;
     stateReceivedAt = Date.now();
@@ -2012,25 +2060,30 @@
     render();
   });
 
+  let lastKeyAct = 0;
   // --- Tastatur: Leertaste würfelt, Enter beendet den Zug, Esc schließt Fenster ---
   document.addEventListener('keydown', (e) => {
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     const tag = (e.target && e.target.tagName) || '';
-    if (/INPUT|TEXTAREA|SELECT/.test(tag)) return;
+    if (/INPUT|TEXTAREA|SELECT/.test(tag) || (e.target && e.target.isContentEditable)) return;
     if ($('screen-game').classList.contains('hidden')) return;
     if (e.key === 'Escape') {
-      if (document.querySelector('.modal:not(.hidden)')) { closeAllModals(); e.preventDefault(); }
+      const open = Array.from(document.querySelectorAll('.modal:not(.hidden)')).filter((m) => m.id !== 'trade-in-modal' && m.id !== 'over-modal');
+      if (open.length) { open.forEach((m) => hide(m)); propModalPos = null; e.preventDefault(); }
       else if (b3 && b3.dismissCard) b3.dismissCard();
       return;
     }
     if (document.querySelector('.modal:not(.hidden)')) return;
+    if (e.repeat || /BUTTON|A/.test(tag)) return;
+    const nowK = Date.now();
+    if (nowK - lastKeyAct < 700) return;
     const pick = (re) => Array.from($('dock-actions').querySelectorAll('button')).find((b) => !b.disabled && re.test(b.textContent));
     if (e.key === ' ' || e.code === 'Space') {
       const b = pick(/würfeln|Pasch versuchen/i);
-      if (b) { e.preventDefault(); b.click(); }
+      if (b) { e.preventDefault(); lastKeyAct = nowK; b.click(); }
     } else if (e.key === 'Enter') {
       const b = pick(/Zug beenden/);
-      if (b) { e.preventDefault(); b.click(); }
+      if (b) { e.preventDefault(); lastKeyAct = nowK; b.click(); }
     }
   });
 
@@ -2058,7 +2111,16 @@
   init3d();
 
   // "Überspringen" wird nach einer Wartezeit sichtbar - dafür regelmäßig neu prüfen.
+  let lastCanSkip = false;
   setInterval(() => {
-    if (S && S.game && S.wait && isHost()) { dockKey = ''; renderDockActions(S); }
-  }, 3000);
+    if (dockBusyShown && S && S.game && !isBusy()) { dockKey = ''; renderDockActions(S); }
+    if (!(S && S.game && S.wait && isHost())) { lastCanSkip = false; return; }
+    const can = !S.wait.ids.includes(myId()) && S.wait.elapsedMs + (Date.now() - stateReceivedAt) >= SKIP_MIN_WAIT_MS;
+    if (can !== lastCanSkip) { lastCanSkip = can; dockKey = ''; renderDockActions(S); }
+  }, 400);
+
+  // Barrierefreiheit: Dialoge und Meldungen für Screenreader auszeichnen
+  document.querySelectorAll('.modal').forEach((m) => { m.setAttribute('role', 'dialog'); m.setAttribute('aria-modal', 'true'); });
+  { const t = $('toast'); if (t) { t.setAttribute('role', 'status'); t.setAttribute('aria-live', 'polite'); } }
+  { const f = $('dock-actions'); if (f) f.setAttribute('aria-live', 'polite'); }
 })();

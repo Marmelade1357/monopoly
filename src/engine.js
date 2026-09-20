@@ -107,7 +107,7 @@ function netWorth(room, id) {
     const sq = SQUARES[pos];
     const p = g.props[pos];
     sum += p.mortgaged ? mortgageValue(sq) : sq.price;
-    if (p.houses) sum += p.houses * (GROUPS[sq.group].houseCost);
+    if (p.houses) sum += p.houses * (GROUPS[sq.group].houseCost / 2);
   });
   return sum;
 }
@@ -225,7 +225,9 @@ function limitReached(room) {
 
 function finishByLimit(room) {
   const g = room.g;
-  const left = alive(room).slice().sort((a, b) => netWorth(room, b) - netWorth(room, a));
+  const nw = {};
+  alive(room).forEach((id) => { nw[id] = netWorth(room, id); });
+  const left = alive(room).slice().sort((a, b) => (nw[b] - nw[a]) || ((g.money[b] || 0) - (g.money[a] || 0)) || (ownedBy(g, b).length - ownedBy(g, a).length));
   g.phase = 'over';
   g.limitReached = true;
   g.winner = left[0] || null;
@@ -319,6 +321,7 @@ function debtTotal(g, id) {
 function proceed(room) {
   const g = room.g;
   if (g.phase === 'over') return;
+  if (alive(room).length <= 1) { g.debts = []; g.buy = null; g.auction = null; g.auctionQueue = []; g.pendingMove = null; g.trade = null; checkWinner(room); return; }
   settleDebts(room);
   if (g.debts.length) { g.phase = 'debt'; return; }
   if (g.pendingMove) {
@@ -374,10 +377,8 @@ function advanceTo(room, id, pos, ctx) {
   g.pos[id] = pos;
   recordMove(g, { id, from, to: pos, kind: 'steps' });
   if (pos < from) {
-    const bonus = rule(room, 'doubleGo') && pos === 0;
-    const sum = bonus ? GO_SALARY * 2 : GO_SALARY;
-    transfer(room, null, id, sum);
-    log(room, `${nameOf(room, id)} ${bonus ? 'landet genau auf LOS und erhält das doppelte Gehalt:' : 'zieht über LOS und erhält'} ${fmt(sum)}.`);
+    transfer(room, null, id, GO_SALARY);
+    log(room, `${nameOf(room, id)} zieht über LOS und erhält ${fmt(GO_SALARY)}.`);
   }
   landOn(room, id, ctx || {});
 }
@@ -1013,7 +1014,7 @@ function declareBankrupt(room, id) {
   }
   g.jailCards[id] = [];
 
-  g.debts = g.debts.filter((d) => d.from !== id).map((d) => (d.to === id ? Object.assign({}, d, { to: creditor }) : d));
+  g.debts = g.debts.filter((d) => d.from !== id).map((d) => (d.to === id ? Object.assign({}, d, { to: creditor }) : d)).filter((d) => !d.to || d.to !== d.from);
   if (g.trade && (g.trade.from === id || g.trade.to === id)) g.trade = null;
   if (g.pendingMove && g.pendingMove.id === id) g.pendingMove = null;
   if (g.buy && g.buy.playerId === id) { if (rule(room, 'auction')) g.auctionQueue.push(g.buy.pos); g.buy = null; }
@@ -1035,9 +1036,22 @@ function act(room, id, a) {
   return res;
 }
 
+// Spieler, die während einer Auktion gegangen sind, scheiden aus, sobald die Auktion vorbei ist.
+function settleLeavers(room) {
+  const g = room.g;
+  for (let guard = 0; guard < 8; guard++) {
+    if (!g || g.phase === 'over' || g.phase === 'auction') return;
+    const p = (room.players || []).find((x) => x.left && g.order.includes(x.id) && !g.bankrupt[x.id]);
+    if (!p) return;
+    const r = declareBankrupt(room, p.id);
+    if (!r || !r.ok) return;
+  }
+}
+
 // Nach jeder Aktion: neue Monopole und Häuserknappheit erkennen (für Banner und Zusammenfassung).
 function afterAct(room) {
   const g = room.g;
+  settleLeavers(room);
   Object.keys(GROUP_POSITIONS).forEach((group) => {
     if (group === 'station' || group === 'utility') return;
     const ps = GROUP_POSITIONS[group];

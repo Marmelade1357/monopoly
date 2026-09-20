@@ -50,9 +50,9 @@ function connectClient(url) {
   });
 }
 
-function emitAsync(socket, event, payload) {
+function emitAsync(socket, event, payload, ms = 5000) {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`Timeout bei Event "${event}"`)), 5000);
+    const timer = setTimeout(() => reject(new Error(`Timeout bei Event "${event}"`)), ms);
     socket.emit(event, payload, (res) => { clearTimeout(timer); resolve(res); });
   });
 }

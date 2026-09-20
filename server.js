@@ -5,6 +5,7 @@
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
+const crypto = require('crypto');
 const express = require('express');
 const { Server } = require('socket.io');
 
@@ -13,7 +14,7 @@ const { botAct, autoAct, suggestTrade } = require('./src/bots.js');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
+const io = new Server(server, { maxHttpBufferSize: 50 * 1024 });
 
 const PORT = process.env.PORT || 3000;
 
@@ -87,14 +88,19 @@ function makeRoomCode() {
   do {
     code = '';
     for (let i = 0; i < 4; i++) {
-      code += ROOM_CODE_CHARS[Math.floor(Math.random() * ROOM_CODE_CHARS.length)];
+      code += ROOM_CODE_CHARS[crypto.randomInt(ROOM_CODE_CHARS.length)];
     }
   } while (rooms.has(code));
   return code;
 }
 
 function makeId() {
-  return Math.random().toString(36).slice(2) + Date.now().toString(36);
+  return crypto.randomBytes(12).toString('hex');
+}
+
+// Namen: nur harmlose Zeichen (keine Steuerzeichen, keine HTML-Sonderzeichen), max. 20 Zeichen.
+function cleanName(n) {
+  return String(n == null ? '' : n).replace(/[\u0000-\u001f\u007f<>&"'`]/g, '').replace(/\s+/g, ' ').trim().slice(0, 20);
 }
 
 // ---------------------------------------------------------------------------
@@ -102,8 +108,9 @@ function makeId() {
 // ---------------------------------------------------------------------------
 
 function getClientIp(socket) {
+  // Der Reverse Proxy hängt die echte Adresse hinten an; vorne stehende Einträge kann der Client fälschen.
   const forwarded = socket.handshake.headers['x-forwarded-for'];
-  if (forwarded) return forwarded.split(',')[0].trim();
+  if (forwarded) { const parts = String(forwarded).split(',').map((x) => x.trim()).filter(Boolean); if (parts.length) return parts[parts.length - 1]; }
   return socket.handshake.address || 'unknown';
 }
 
@@ -160,10 +167,15 @@ function destroyRoom(room) {
   if (room.cleanupTimer) clearTimeout(room.cleanupTimer);
   if (room.botTimer) clearTimeout(room.botTimer);
   if (room.hostTimer) clearTimeout(room.hostTimer);
+  if (room.turnTimer) clearTimeout(room.turnTimer);
+  if (room.actTimer) clearTimeout(room.actTimer);
+  flushActs(room, 'Der Raum wurde geschlossen.');
+  room.destroyed = true;
   rooms.delete(room.code);
 }
 
 function touchRoom(room) {
+  if (room.destroyed) return;
   room.lastActivity = Date.now();
   if (room.cleanupTimer) clearTimeout(room.cleanupTimer);
   room.cleanupTimer = setTimeout(() => destroyRoom(room), ROOM_CLEANUP_MS);
@@ -365,11 +377,25 @@ function broadcastState(room) {
 // Bots (und getrennte Menschen) spielen automatisch
 // ---------------------------------------------------------------------------
 
+// Getrennte Menschen bekommen eine kurze Gnadenfrist (WLAN-Wechsel), bevor ein Bot für sie spielt.
+const DISCONNECT_GRACE_MS = process.env.DISCONNECT_GRACE_MS !== undefined ? Number(process.env.DISCONNECT_GRACE_MS) : 15000;
+function graceLeft(p) {
+  if (p.isBot || p.connected || p.left || p.afk) return 0;
+  return Math.max(0, (p.disconnectedAt || 0) + DISCONNECT_GRACE_MS - Date.now());
+}
 function pickBotActor(room) {
   return engine.pendingActors(room).find((a) => {
     const p = findPlayer(room, a.id);
-    return p && (p.isBot || !p.connected || p.left || p.afk);
+    return p && (p.isBot || p.left || p.afk || (!p.connected && graceLeft(p) === 0));
   });
+}
+function graceWait(room) {
+  let best = 0;
+  engine.pendingActors(room).forEach((a) => {
+    const p = findPlayer(room, a.id);
+    if (p) { const g = graceLeft(p); if (g > 0 && (!best || g < best)) best = g; }
+  });
+  return best;
 }
 
 function scheduleBots(room) {
@@ -377,7 +403,14 @@ function scheduleBots(room) {
   if (room.phase !== 'playing' || !room.g || room.g.phase === 'over') return;
   // Ohne anwesende Menschen pausiert das Spiel, statt endlos weiterzulaufen.
   if (!room.players.some((p) => !p.isBot && p.connected && !p.left)) return;
-  if (!pickBotActor(room)) return;
+  if (!pickBotActor(room)) {
+    const gw = graceWait(room);
+    if (gw > 0) {
+      room.botTimer = setTimeout(() => { room.botTimer = null; if (rooms.has(room.code)) broadcastState(room); }, gw + 50);
+      if (room.botTimer.unref) room.botTimer.unref();
+    }
+    return;
+  }
   room.botTimer = setTimeout(() => {
     room.botTimer = null;
     if (!rooms.has(room.code)) return;
@@ -405,16 +438,86 @@ function roomOf(socket) {
   return rooms.get(socket.data.roomCode);
 }
 
+// Aktionen, die während einer Animation eintreffen, werden pro Raum der Reihe nach
+// zurückgehalten und erst danach ausgeführt (statt abgelehnt zu werden).
+const MAX_ACT_QUEUE = 8;
+const MAX_ACT_WAIT_MS = 12000;
+
+function flushActs(room, error) {
+  const q = room.actQ || [];
+  room.actQ = [];
+  q.forEach((j) => { try { j.reply({ ok: false, error }); } catch (e) { /* Socket weg */ } });
+}
+
+function pumpActs(room) {
+  if (room.actTimer || !room.actQ || !room.actQ.length) return;
+  const job = room.actQ[0];
+  const wait = room.animUntil ? room.animUntil - Date.now() : 0;
+  if (wait > 0) {
+    if (wait > MAX_ACT_WAIT_MS) { room.actQ.shift(); job.reply({ ok: false, error: 'Einen Moment – die Figur ist noch unterwegs.' }); return pumpActs(room); }
+    room.actTimer = setTimeout(() => { room.actTimer = null; pumpActs(room); }, wait + 30);
+    if (room.actTimer.unref) room.actTimer.unref();
+    return;
+  }
+  room.actQ.shift();
+  job.run();
+  pumpActs(room);
+}
+
+// Jeden Socket-Handler absichern: fehlerhafte oder fehlende Daten dürfen den Server nie abstürzen lassen.
+function safeHandler(socket, evt, fn) {
+  return (...args) => {
+    const cb = [...args].reverse().find((a) => typeof a === 'function');
+    const reply = cb || (() => {});
+    try {
+      if (evt === 'disconnect') return fn(...args);
+      if (isRateLimited(`ev:${socket.id}`, 200, 10 * 1000)) return reply({ ok: false, error: 'Bitte langsamer.' });
+      const first = args[0];
+      const data = first && typeof first === 'object' && !Array.isArray(first) ? first : {};
+      return fn(data, reply);
+    } catch (err) {
+      console.error(`Fehler in Handler "${evt}":`, err);
+      try { reply({ ok: false, error: 'Interner Fehler.' }); } catch (e) { /* ignorieren */ }
+    }
+  };
+}
+
+// Socket aus seinem bisherigen Raum lösen (Disconnect, Raumwechsel).
+function detachSocket(socket) {
+  const room = roomOf(socket);
+  if (!room) return;
+  const player = findPlayer(room, socket.data.playerId);
+  if (!player) {
+    if (room.spectators && room.spectators.delete(socket.id)) broadcastState(room);
+    socket.leave(room.code); socket.data.roomCode = null; socket.data.spectatorOf = null;
+    return;
+  }
+  // Bei einem Reconnect übernimmt ein neuer Socket bereits player.socketId,
+  // bevor das 'disconnect'-Event des alten Sockets eintrifft (Reihenfolge nicht
+  // garantiert). Ohne diese Prüfung würde das verspätete Event die Person
+  // fälschlich als getrennt markieren, obwohl sie längst wieder verbunden ist.
+  if (player.socketId !== socket.id) return;
+  player.connected = false;
+  player.disconnectedAt = Date.now();
+  log(room, `${player.name} hat die Verbindung verloren.`);
+  if (room.hostId === player.id) scheduleHostHandover(room);
+  socket.leave(room.code); socket.data.roomCode = null;
+  touchRoom(room);
+  broadcastState(room);
+}
+
 io.on('connection', (socket) => {
+  { const rawOn = socket.on.bind(socket); socket.on = (evt, fn) => rawOn(evt, safeHandler(socket, evt, fn)); }
   socket.on('createRoom', ({ name }, cb) => {
     try {
+      if (socket.data.roomCode) detachSocket(socket);
       if (isRateLimited(`createRoom:${getClientIp(socket)}`, 8, 60 * 1000)) {
         return cb({ ok: false, error: 'Zu viele neue Räume in kurzer Zeit. Bitte kurz warten und erneut versuchen.' });
       }
       if (rooms.size >= MAX_ROOMS) {
         return cb({ ok: false, error: 'Gerade sind zu viele Räume aktiv. Bitte versuche es in ein paar Minuten erneut.' });
       }
-      name = (name || '').trim().slice(0, 20) || 'Spieler';
+      name = cleanName(name) || 'Spieler';
       const room = createRoom();
       const player = newPlayer(room, name, socket, false);
       room.hostId = player.id;
@@ -434,16 +537,19 @@ io.on('connection', (socket) => {
     if (isRateLimited(`joinRoom:${getClientIp(socket)}`, 20, 60 * 1000)) {
       return cb({ ok: false, error: 'Zu viele Versuche in kurzer Zeit. Bitte kurz warten und erneut versuchen.' });
     }
-    code = (code || '').trim().toUpperCase();
+    code = String(code == null ? '' : code).trim().toUpperCase().slice(0, 8);
     const room = rooms.get(code);
     if (!room) return cb({ ok: false, error: 'Diesen Raum gibt es nicht.' });
+    if (socket.data.roomCode && (socket.data.roomCode !== code || !socket.data.playerId)) detachSocket(socket);
 
-    if (token) {
+    if (token && typeof token === 'string') {
       const existing = room.players.find((p) => p.token === token && !p.left);
       if (existing) {
         existing.socketId = socket.id;
         existing.connected = true;
+        existing.disconnectedAt = 0;
         if (room.hostId === existing.id && room.hostTimer) { clearTimeout(room.hostTimer); room.hostTimer = null; }
+        { const h = findPlayer(room, room.hostId); if (!h || (!h.isBot && !h.connected && !room.hostTimer)) scheduleHostHandover(room); }
         socket.join(room.code);
         socket.data.roomCode = room.code;
         socket.data.playerId = existing.id;
@@ -470,7 +576,7 @@ io.on('connection', (socket) => {
     if (room.players.length >= MAX_PLAYERS) {
       return cb({ ok: false, error: `Der Raum ist bereits voll (max. ${MAX_PLAYERS} Spieler).` });
     }
-    name = (name || '').trim().slice(0, 20) || 'Spieler';
+    name = cleanName(name) || 'Spieler';
     if (room.players.some((p) => p.name.toLowerCase() === name.toLowerCase())) {
       return cb({ ok: false, error: 'Dieser Name ist im Raum bereits vergeben.' });
     }
@@ -512,7 +618,8 @@ io.on('connection', (socket) => {
       if (room.phase === 'playing' && room.g && !room.g.bankrupt[player.id]) {
         // Wer geht, gibt auf (Besitz geht an die Bank). Läuft gerade eine Auktion,
         // spielt bis dahin der Bot für die Person weiter.
-        engine.act(room, player.id, { type: 'resign' });
+        const rr = engine.act(room, player.id, { type: 'resign' });
+        if (!rr.ok) log(room, `${player.name} wird nach der laufenden Auktion aufgeben.`);
       }
       ensureHost(room);
     }
@@ -595,52 +702,56 @@ io.on('connection', (socket) => {
     room.phase = 'playing';
     room.animSeen = undefined; room.animUntil = 0; room.timerSig = null; room.timerInfo = null; if (room.turnTimer) { clearTimeout(room.turnTimer); room.turnTimer = null; }
     room.logs = [];
+    room.players.forEach((p) => { p.afk = false; p.timeouts = 0; });
+    flushActs(room, 'Neue Partie gestartet.');
     engine.initGame(room);
     touchRoom(room);
     broadcastState(room);
   });
 
   // Alle Spielaktionen (würfeln, kaufen, bieten, bauen, handeln, ...) laufen über ein Event.
-  socket.on('act', (action, cb) => {
-    const reply = typeof cb === 'function' ? cb : () => {};
+  socket.on('act', (action, reply) => {
     const room = roomOf(socket);
     if (!room || room.phase !== 'playing') return reply({ ok: false, error: 'Es läuft gerade kein Spiel.' });
     if (!socket.data.playerId) return reply({ ok: false, error: 'Du schaust nur zu.' });
     if (isRateLimited(`act:${socket.id}`, 60, 10 * 1000)) return reply({ ok: false, error: 'Bitte langsamer.' });
+    const playerId = socket.data.playerId;
+    const stamp = room.g;
     const run = () => {
+      // Zwischenzeitlich kann Raum oder Spiel weg sein oder die Person das Spiel verlassen haben.
+      const p = findPlayer(room, playerId);
+      if (room.destroyed || room.g !== stamp || room.phase !== 'playing' || !p || p.left) return reply({ ok: false, error: 'Das Spiel hat sich geändert.' });
       let res;
       try {
-        res = engine.act(room, socket.data.playerId, action || {});
+        res = engine.act(room, playerId, action);
       } catch (err) {
         console.error('Aktionsfehler:', err);
         res = { ok: false, error: 'Interner Fehler.' };
       }
-      if (res.ok) { const me = findPlayer(room, socket.data.playerId); if (me) me.timeouts = 0; }
+      if (res.ok) p.timeouts = 0;
       touchRoom(room);
       if (res.ok) broadcastState(room);
       reply(res);
     };
-    // Läuft noch eine Animation, wird die Aktion kurz zurückgehalten statt abgelehnt
+    // Läuft noch eine Animation, wird die Aktion zurückgehalten statt abgelehnt
     // (sonst scheitert z. B. das Würfeln, wenn man einen Moment zu früh klickt).
+    if (action && action.type === 'resign') return run();
     const wait = room.animUntil ? room.animUntil - Date.now() : 0;
-    if (wait > 0 && (action || {}).type !== 'resign') {
-      if (wait > 6000) return reply({ ok: false, error: 'Einen Moment – die Figur ist noch unterwegs.' });
-      const stamp = room.g;
-      setTimeout(() => { if (room.g === stamp && room.phase === 'playing') run(); else reply({ ok: false, error: 'Das Spiel hat sich geändert.' }); }, wait + 30);
-      return;
-    }
-    run();
+    if (wait <= 0 && !(room.actQ && room.actQ.length)) return run();
+    room.actQ = room.actQ || [];
+    if (room.actQ.length >= MAX_ACT_QUEUE) return reply({ ok: false, error: 'Bitte langsamer.' });
+    room.actQ.push({ run, reply });
+    pumpActs(room);
   });
 
   // Vorschlag für ein faires Handelsangebot (ändert nichts am Spiel).
-  socket.on('suggestTrade', (data, cb) => {
-    const reply = typeof cb === 'function' ? cb : () => {};
+  socket.on('suggestTrade', (data, reply) => {
     const room = roomOf(socket);
     if (!room || room.phase !== 'playing' || !room.g) return reply({ ok: false, error: 'Es läuft gerade kein Spiel.' });
     if (!socket.data.playerId) return reply({ ok: false, error: 'Du schaust nur zu.' });
     if (isRateLimited(`sug:${socket.id}`, 20, 10 * 1000)) return reply({ ok: false, error: 'Bitte langsamer.' });
-    const to = data && data.to;
-    if (!room.players.some((p) => p.id === to)) return reply({ ok: false, error: 'Unbekannte Person.' });
+    const to = data.to;
+    if (typeof to !== 'string' || !room.players.some((p) => p.id === to)) return reply({ ok: false, error: 'Unbekannte Person.' });
     try { reply(suggestTrade(room, socket.data.playerId, to)); } catch (err) { console.error(err); reply({ ok: false, error: 'Interner Fehler.' }); }
   });
 
@@ -664,6 +775,8 @@ io.on('connection', (socket) => {
     room.g = null;
     room.animSeen = undefined; room.animUntil = 0; room.timerSig = null; room.timerInfo = null; if (room.turnTimer) { clearTimeout(room.turnTimer); room.turnTimer = null; }
     room.logs = [];
+    flushActs(room, 'Zurück in der Lobby.');
+    room.players.forEach((p) => { p.afk = false; p.timeouts = 0; });
     // Wer die Partie verlassen hat, verschwindet aus der Lobby.
     room.players = room.players.filter((p) => !p.left);
     room.players.forEach((p) => { if (!p.isBot && !p.connected) p.connected = false; });
@@ -675,6 +788,8 @@ io.on('connection', (socket) => {
   socket.on('skipTurn', () => {
     const room = roomOf(socket);
     if (!room || room.phase !== 'playing') return;
+    const me0 = findPlayer(room, socket.data.playerId);
+    if (!me0 || me0.left || me0.isBot) return;
     const info = waitInfo(room);
     if (!info || info.elapsedMs < SKIP_MIN_WAIT_MS) return;
     const isHost = socket.data.playerId === room.hostId;
@@ -688,26 +803,19 @@ io.on('connection', (socket) => {
     broadcastState(room);
   });
 
-  socket.on('disconnect', () => {
-    const room = roomOf(socket);
-    if (!room) return;
-    const player = findPlayer(room, socket.data.playerId);
-    if (!player) {
-      if (room.spectators && room.spectators.delete(socket.id)) broadcastState(room);
-      return;
-    }
-    // Bei einem Reconnect übernimmt ein neuer Socket bereits player.socketId,
-    // bevor das 'disconnect'-Event des alten Sockets eintrifft (Reihenfolge nicht
-    // garantiert). Ohne diese Prüfung würde das verspätete Event die Person
-    // fälschlich als getrennt markieren, obwohl sie längst wieder verbunden ist.
-    if (player.socketId !== socket.id) return;
-    player.connected = false;
-    log(room, `${player.name} hat die Verbindung verloren.`);
-    if (room.hostId === player.id) scheduleHostHandover(room);
-    touchRoom(room);
-    broadcastState(room);
-  });
+  socket.on('disconnect', () => { detachSocket(socket); });
 });
+
+process.on('uncaughtException', (err) => { console.error('Unbehandelter Fehler:', err); });
+process.on('unhandledRejection', (err) => { console.error('Unbehandelte Promise-Ablehnung:', err); });
+
+// Sauber beenden (docker stop): Clients informieren, Verbindungen schließen.
+function shutdown() {
+  try { io.emit('serverRestart'); } catch (e) { /* egal */ }
+  setTimeout(() => process.exit(0), 300).unref();
+}
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
 
 server.listen(PORT, () => {
   console.log(`Monopoly (Entenhausen) läuft auf Port ${PORT}`);

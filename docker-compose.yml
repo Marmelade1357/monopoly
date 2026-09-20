@@ -14,4 +14,5 @@ services:
       # belegt sind, 8094 vom Spielehub selbst, und 8095-8098 von Bluff,
       # Tempel des Schreckens, Poker und Munchkin.
       - "127.0.0.1:8099:3000"
+    init: true
     restart: unless-stopped
