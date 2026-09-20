@@ -457,6 +457,8 @@
     const btn = $('btn-view3d');
     if (btn) btn.innerHTML = mode3d ? '🗺️<span class="lbl"> 2D</span>' : '🧊<span class="lbl"> 3D</span>';
     $('view3d-tools').classList.toggle('hidden', !mode3d);
+    const sg = $('screen-game'); if (sg) sg.classList.toggle('mode3d-ui', mode3d);
+    if (!mode3d && typeof showTip3d === 'function') showTip3d(null);
   }
   async function ensure3d() {
     if (b3 || b3Loading || b3Failed) return;
@@ -470,6 +472,7 @@
         SQUARES, GROUPS,
         onTile: (pos) => { const t = SQUARES[pos].type; if (t === 'property' || t === 'station' || t === 'utility') openProp(pos); },
         onToken: (id) => openPlayer(id),
+        onHover: showTip3d,
         isPickable: (pos) => { const t = SQUARES[pos].type; return t === 'property' || t === 'station' || t === 'utility'; },
       });
       b3 = m;
@@ -482,6 +485,22 @@
     }
     b3Loading = false;
   }
+  let tipEl = null;
+  function showTip3d(pos, x, y) {
+    if (!tipEl) { tipEl = el('div', { class: 'tip3d hidden' }); document.body.appendChild(tipEl); }
+    if (pos === null || pos === undefined) { tipEl.classList.add('hidden'); return; }
+    const sq = SQUARES[pos];
+    const pr = S && S.game && S.game.props.find((q) => q.pos === pos);
+    let sub = sq.price ? `${sq.price} ₮` : (sq.type === 'tax' ? `zahle ${sq.amount} ₮` : '');
+    if (pr) sub += ` · ${pname(pr.owner)}${pr.houses ? (pr.houses === 5 ? ' · Hotel' : ` · ${pr.houses} 🏠`) : ''}${pr.mortgaged ? ' · Hypothek' : ''}`;
+    tipEl.innerHTML = '';
+    if (sq.group && GROUPS[sq.group]) tipEl.appendChild(el('i', { style: `background:${GROUPS[sq.group].color}` }));
+    tipEl.appendChild(el('b', { text: sq.name }));
+    if (sub) tipEl.appendChild(el('small', { text: sub }));
+    tipEl.style.left = Math.min(window.innerWidth - 240, x + 14) + 'px';
+    tipEl.style.top = (y + 16) + 'px';
+    tipEl.classList.remove('hidden');
+  }
   function sync3d() {
     if (!b3 || !S || !S.game) return;
     const g = S.game;
@@ -492,7 +511,7 @@
         const p = pinfo(id);
         return { id, color: p ? p.color : '#888', emoji: p ? p.emoji : '?', pos: shownPos[id] !== undefined ? shownPos[id] : g.players[id].pos, inJail: !!g.players[id].inJail, bankrupt: !!g.players[id].bankrupt };
       }),
-      props: g.props.map((p) => ({ pos: p.pos, owner: p.owner, houses: p.houses, mortgaged: !!p.mortgaged, ownerColor: pcolor(p.owner) })),
+      props: g.props.map((p) => ({ pos: p.pos, owner: p.owner, houses: p.houses, mortgaged: !!p.mortgaged, ownerColor: pcolor(p.owner), ownerEmoji: (pinfo(p.owner) || {}).emoji || '' })),
       turnId: g.phase === 'over' ? null : g.turnId,
       pot: g.pot, freeParking: !!(g.rules && g.rules.freeParking),
       fast: !!(S.settings && S.settings.speed === 'fast'),
@@ -510,6 +529,8 @@
     if (mode3d) ensure3d();
     $('btn-view3d').addEventListener('click', () => setMode3d(!mode3d));
     $('btn-reset3d').addEventListener('click', () => { if (b3) b3.resetView(); });
+    let top = false;
+    $('btn-top3d').addEventListener('click', () => { if (!b3 || !b3.setTopDown) return; top = !b3.isTopDown(); b3.setTopDown(top); $('btn-top3d').textContent = top ? '🧭 Schräg' : '⬆️ Von oben'; });
     $('btn-cam3d').addEventListener('click', () => { camMode = CAMS[(CAMS.findIndex((x) => x[0] === camMode) + 1) % CAMS.length][0]; safeSet('mono_cam', camMode); applyCam(); });
     applyCam();
   }
@@ -922,6 +943,8 @@
     list.innerHTML = '';
     const mine = myProps(g);
     $('dock-props-title').textContent = `Meine Grundstücke (${mine.length})`;
+    const jc = (g.players[myId()] || {}).jailCards || 0;
+    if (jc) list.appendChild(el('div', { class: 'jail-own', text: `🔑 ${jc}× Gefängnis-Freikarte – im Handel anbietbar` }));
     if (!mine.length) {
       list.appendChild(el('div', { class: 'empty', text: 'Noch keine Grundstücke – kaufe oder ersteigere welche!' }));
       return;
@@ -1257,10 +1280,19 @@
     col.appendChild(el('label', { text: 'Geld (Taler)' }));
     col.appendChild(cashIn);
     if (gp.jailCards) {
-      col.appendChild(el('label', { text: `Freikarten (max. ${gp.jailCards})` }));
-      const cIn = el('input', { type: 'number', min: 0, max: gp.jailCards, value: side.cards || '', placeholder: '0' });
-      cIn.addEventListener('input', () => { side.cards = Math.max(0, Math.min(gp.jailCards, Math.round(Number(cIn.value) || 0))); renderTradeSummary(); });
-      col.appendChild(cIn);
+      col.appendChild(el('label', { text: `Freikarte${gp.jailCards > 1 ? 'n' : ''} (zum Handeln antippen)` }));
+      const row = el('div', { class: 'pl-cards', style: 'margin:0 0 6px' });
+      for (let i = 0; i < gp.jailCards; i++) {
+        const chip = el('button', { type: 'button', class: 'jail-chip' + (i < side.cards ? ' picked' : ''), text: '🔑 Freikarte' });
+        chip.title = 'Gefängnis-Freikarte';
+        chip.addEventListener('click', () => {
+          side.cards = i < side.cards ? i : i + 1;
+          row.querySelectorAll('.jail-chip').forEach((ch, j) => ch.classList.toggle('picked', j < side.cards));
+          renderTradeSummary();
+        });
+        row.appendChild(chip);
+      }
+      col.appendChild(row);
     }
     col.appendChild(el('label', { text: 'Grundstücke' }));
     const cards = el('div', { class: 'pl-cards', style: 'margin:0' });

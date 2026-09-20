@@ -39,6 +39,8 @@ let camMode = 'soft';          // 'soft' (sanft nachführen) | 'fixed' | 'cinema
 let diceUntil = 0;
 let cardObj = null;
 let elevDeg = 65;
+let camHold = null;
+let camF = { x: 0, z: 0, zoom: 1 };
 
 const SIZES = [CORNER, 1, 1, 1, 1, 1, 1, 1, 1, 1, CORNER];
 
@@ -357,20 +359,23 @@ function badgeTexture(color, emoji) {
 
 function makeFrame(t, color, emoji, cssColor) {
   const g = new THREE.Group();
-  const mat = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.9, roughness: 0.4 });
-  const { w, d } = t.rect; const th = 0.11;
-  [[0, -(d / 2 - th / 2), w - 0.02, th], [0, d / 2 - th / 2, w - 0.02, th], [-(w / 2 - th / 2), 0, th, d - 0.02], [w / 2 - th / 2, 0, th, d - 0.02]].forEach(([x, z, sw, sd]) => {
-    const m = new THREE.Mesh(new THREE.BoxGeometry(sw, 0.06, sd), mat);
-    m.position.set(x, TOP + 0.025, z);
-    m.castShadow = true;
-    g.add(m);
-  });
+  // Das Feld selbst bleibt unverändert lesbar: Der Besitzer wird durch eine schmale, leuchtende
+  // Leiste am äußeren Brettrand und einen kleinen Marker mit Emoji in der äußeren Ecke gezeigt.
+  const mat = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.7, roughness: 0.35 });
+  const { w, d } = t.rect;
   const bc = t.side ? bandCentre(t) : { x: 0, z: 0, alongX: true };
+  let strip, sx = 0, sz = 0;
+  if (bc.alongX) { const sg = bc.z < 0 ? 1 : -1; strip = new THREE.BoxGeometry(w - 0.06, 0.09, 0.055); sz = sg * (d / 2 - 0.0275); }
+  else { const sg = bc.x > 0 ? -1 : 1; strip = new THREE.BoxGeometry(0.055, 0.09, d - 0.06); sx = sg * (w / 2 - 0.0275); }
+  const m = new THREE.Mesh(strip, mat);
+  m.position.set(sx, TOP + 0.045, sz);
+  m.castShadow = true;
+  g.add(m);
   let bx, bz;
-  if (bc.alongX) { bx = w / 2 - 0.26; bz = bc.z < 0 ? d / 2 - 0.26 : -(d / 2 - 0.26); }
-  else { bz = d / 2 - 0.26; bx = bc.x > 0 ? -(w / 2 - 0.26) : w / 2 - 0.26; }
-  const badge = new THREE.Mesh(new THREE.CircleGeometry(0.21, 28), new THREE.MeshBasicMaterial({ map: badgeTexture(cssColor || '#888', emoji), transparent: true }));
-  badge.rotation.x = -Math.PI / 2; badge.position.set(bx, TOP + 0.05, bz);
+  if (bc.alongX) { bx = w / 2 - 0.24; bz = bc.z < 0 ? d / 2 - 0.27 : -(d / 2 - 0.27); }
+  else { bz = d / 2 - 0.24; bx = bc.x > 0 ? -(w / 2 - 0.27) : w / 2 - 0.27; }
+  const badge = new THREE.Mesh(new THREE.CircleGeometry(0.17, 28), new THREE.MeshBasicMaterial({ map: badgeTexture(cssColor || '#888', emoji), transparent: true }));
+  badge.rotation.x = -Math.PI / 2; badge.position.set(bx, TOP + 0.03, bz);
   g.add(badge);
   g.userData.mat = mat;
   return g;
@@ -962,12 +967,28 @@ function fitDistance() {
   return { dir, dist: hi };
 }
 
+let viewTweenUntil = 0;
+export function isTopDown() { return elevDeg > 75; }
 export function setTopDown(on) {
   elevDeg = on ? 84 : 65;
-  if (camera) resetView();
+  if (!camera || !controls) return;
+  const off0 = camera.position.clone().sub(controls.target);
+  const d0 = off0.length() || 20;
+  const az = Math.atan2(off0.x, off0.z);
+  const el0 = Math.asin(Math.max(-1, Math.min(1, off0.y / d0)));
+  const { dist } = fitDistance();
+  controls.minDistance = dist * 0.45; controls.maxDistance = dist * 1.25;
+  const el1 = (elevDeg * Math.PI) / 180;
+  viewTweenUntil = performance.now() + 900;
+  tweens.push({ t: 0, dur: 0.7, fn: (k) => {
+    const e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
+    const el = el0 + (el1 - el0) * e, d = d0 + (dist - d0) * e;
+    camera.position.set(controls.target.x + Math.sin(az) * Math.cos(el) * d, controls.target.y + Math.sin(el) * d, controls.target.z + Math.cos(az) * Math.cos(el) * d);
+  }, done: () => { viewTweenUntil = 0; } });
 }
 
 export function resetView() {
+  camF = { x: 0, z: 0, zoom: 1 }; camHold = null;
   const { dir, dist } = fitDistance();
   camera.position.copy(dir).multiplyScalar(dist);
   controls.target.set(0, 0, 0);
@@ -1032,27 +1053,38 @@ function tick() {
   }
 
   // Kamera: 'soft' schwenkt sanft zur Figur am Zug (ohne zu drehen), 'cinema' zoomt zusätzlich
-  // auf Aktionen, 'fixed' bleibt stehen. Während man selbst dreht, pausiert die Automatik.
-  if (camMode !== 'fixed' && performance.now() > interactUntil) {
+  // auf Aktionen, 'fixed' bleibt stehen. Alle Bewegungen laufen über eine Glättung mit Haltezeit,
+  // damit die Kamera bei Sprüngen der Figuren nicht wackelt oder zwischen Zielen pendelt.
+  if (camMode !== 'fixed' && performance.now() > interactUntil && !viewTweenUntil) {
     const cin = camMode === 'cinema';
     const now = performance.now();
     const moving = Object.values(tokens).find((t) => t.tw && t.group.visible);
     const activeTk = tokens[activeId];
-    let px = 0, pz = 0, zoom = 1;
-    if (moving) { px = moving.group.position.x * (cin ? 0.55 : 0.25); pz = moving.group.position.z * (cin ? 0.55 : 0.25); zoom = cin ? 0.72 : 1; }
-    else if (now < diceUntil) { pz = 0.6; zoom = cin ? 0.7 : 1; }
-    else if (cardObj && !cardObj.leaving) { zoom = cin ? 0.85 : 1; }
-    else if (activeTk) { px = activeTk.group.position.x * 0.22; pz = activeTk.group.position.z * 0.22; }
-    const d = new THREE.Vector3(px, 0, pz).sub(controls.target).multiplyScalar(0.04);
+    let want = null;
+    if (moving) { want = { x: moving.tw.to.x * (cin ? 0.42 : 0.22), z: moving.tw.to.z * (cin ? 0.42 : 0.22), zoom: cin ? 0.8 : 1 }; camHold = { until: now + 1100, want }; }
+    else if (camHold && now < camHold.until) want = camHold.want;
+    else if (now < diceUntil) want = { x: 0, z: 0.6, zoom: cin ? 0.8 : 1 };
+    else if (cardObj && !cardObj.leaving) want = { x: 0, z: 0, zoom: cin ? 0.9 : 1 };
+    else if (activeTk) want = { x: activeTk.group.position.x * 0.2, z: activeTk.group.position.z * 0.2, zoom: 1 };
+    else want = { x: 0, z: 0, zoom: 1 };
+    const a = 1 - Math.exp(-dt * 1.8);
+    camF.x += (want.x - camF.x) * a; camF.z += (want.z - camF.z) * a; camF.zoom += (want.zoom - camF.zoom) * a;
+    const d = new THREE.Vector3(camF.x, 0, camF.z).sub(controls.target);
     controls.target.add(d); camera.position.add(d);
     if (cin) {
       const off = camera.position.clone().sub(controls.target);
-      const len = off.length();
-      off.setLength(len + (fitDist * zoom - len) * 0.035);
+      off.setLength(fitDist * camF.zoom);
       camera.position.copy(controls.target).add(off);
     }
+  } else if (camMode !== 'fixed') {
+    // Während man selbst dreht/zoomt (oder die Ansicht wechselt): Glättung an die echte Kamera angleichen
+    camF.x = controls.target.x; camF.z = controls.target.z;
+    camF.zoom = camera.position.distanceTo(controls.target) / (fitDist || 20);
   }
   controls.update();
+  // Verschieben (Rechtsklick / zwei Finger) nur innerhalb des Bretts
+  { const lim = S / 2 + 1, t = controls.target; const cx = Math.max(-lim, Math.min(lim, t.x)), cz = Math.max(-lim, Math.min(lim, t.z));
+    if (cx !== t.x || cz !== t.z || t.y !== 0) { const dx = cx - t.x, dz = cz - t.z; t.x = cx; t.z = cz; camera.position.x += dx; camera.position.z += dz; if (t.y !== 0) { camera.position.y -= t.y; t.y = 0; } } }
   renderer.render(scene, camera);
 }
 
@@ -1101,7 +1133,10 @@ export function init(opts) {
   buildDice();
 
   controls = new OrbitControls(camera, canvas);
-  controls.enablePan = false;
+  controls.enablePan = true; controls.screenSpacePanning = false; controls.panSpeed = 0.9;
+  controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
+  controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
+  canvas.addEventListener('contextmenu', (e) => e.preventDefault());
   controls.enableDamping = true; controls.dampingFactor = 0.08;
   controls.minPolarAngle = 0.04; controls.maxPolarAngle = 1.3;
   controls.rotateSpeed = 0.7;

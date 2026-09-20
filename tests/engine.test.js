@@ -424,4 +424,16 @@ function ruleRoom(n, rules) {
   assert(room.g.events.some((e) => e.kind === 'rent' && e.amount === 4 && e.owner === 'p1'), 'Miet-Ereignis wird protokolliert');
 }
 
+// Freikarten sind handelbar --------------------------------------------------
+{
+  const room = makeRoom(2);
+  const g = room.g;
+  g.jailCards.p0 = ['chance'];
+  expectFail(act(room, 'p0', { type: 'proposeTrade', to: 'p1', give: { cards: 2 }, get: { cash: 50 } }), 'Mehr Freikarten als vorhanden');
+  expectOk(act(room, 'p0', { type: 'proposeTrade', to: 'p1', give: { cards: 1 }, get: { cash: 50 } }), 'Freikarte anbieten');
+  expectOk(act(room, 'p1', { type: 'acceptTrade' }), 'Freikarte annehmen');
+  assert(g.jailCards.p0.length === 0 && g.jailCards.p1.length === 1, 'Freikarte wechselt den Besitzer');
+  assert(g.money.p0 === 1550 && g.money.p1 === 1450, 'Geld für die Freikarte fließt');
+}
+
 console.log('OK: Engine-Regeln (Miete, Knast, Auktion, Bauen, Hypothek, Handel, Pleite, Karten).');

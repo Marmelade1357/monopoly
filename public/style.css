@@ -670,3 +670,7 @@ input:focus, select:focus { outline: 2px solid var(--accent-bright); }
 .mode3d-ui .board-col { border-radius: 16px; overflow: hidden; }
 .board { transition: opacity 0.3s ease; }
 .board.mode3d { opacity: 1; }
+
+.jail-chip { background: #f3e2a8; color: #3b2b00; border: 2px solid #c9a53a; border-radius: 10px; padding: 6px 10px; font-weight: 800; font-size: 13px; cursor: pointer; }
+.jail-chip.picked { border-color: var(--success); box-shadow: 0 0 0 2px var(--success); background: #fff2c2; }
+.jail-own { background: rgba(243,226,168,0.14); border: 1px dashed #c9a53a; color: #f3e2a8; border-radius: 10px; padding: 6px 10px; margin-bottom: 6px; font-size: 13px; font-weight: 700; }
