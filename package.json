@@ -5,7 +5,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node tests/run.js"
+    "test": "node tests/run.js",
+    "build3d": "esbuild src3d/board3d.src.js --bundle --minify --format=esm --outfile=public/board3d.js"
   },
   "engines": {
     "node": ">=14"
@@ -16,6 +17,8 @@
     "socket.io": "^4.7.5"
   },
   "devDependencies": {
-    "socket.io-client": "^4.7.5"
+    "esbuild": "^0.28.2",
+    "socket.io-client": "^4.7.5",
+    "three": "^0.186.0"
   }
 }

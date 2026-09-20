@@ -29,6 +29,15 @@ async function main() {
     }
     assert(state.logs.some((l) => /Zeit abgelaufen/.test(l.text)), 'Timer greift ein');
     assert(state.game.turnCount >= 1, 'Spiel läuft weiter');
+    // Wiederholtes Ignorieren -> Bot übernimmt, "comeBack" holt die Person zurück.
+    const t1 = Date.now();
+    const meId = () => state.players.find((p) => !p.isBot).id;
+    while (Date.now() - t1 < 20000 && !state.players.find((p) => p.id === meId()).afk) await new Promise((r) => setTimeout(r, 100));
+    assert(state.players.find((p) => p.id === meId()).afk, 'Nach mehreren Timeouts wird der Spieler AFK');
+    a.emit('comeBack');
+    await new Promise((r) => setTimeout(r, 200));
+    assert(!state.players.find((p) => p.id === meId()).afk, 'comeBack hebt AFK auf');
+    a.emit('setSettings', { preset: 'short' });
     a.close();
     console.log('OK: Zug-Timer und Lobby-Einstellungen.');
   } finally {

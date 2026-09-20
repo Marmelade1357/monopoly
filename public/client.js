@@ -252,6 +252,7 @@
   document.querySelectorAll('#lobby-rules input[data-rule]').forEach((cb) => {
     cb.addEventListener('change', () => socket.emit('setSettings', { rules: { [cb.dataset.rule]: cb.checked } }));
   });
+  $('btn-preset-short').addEventListener('click', () => socket.emit('setSettings', { preset: 'short' }));
   $('input-money').addEventListener('change', () => socket.emit('setSettings', { startMoney: $('input-money').value }));
 
   $('btn-share-link').addEventListener('click', async () => {
@@ -299,6 +300,7 @@
     $('btn-add-bot').classList.toggle('hidden', s.players.length >= s.maxPlayers);
     $('btn-fill-bots').classList.toggle('hidden', s.players.length >= s.minPlayers);
     $('lobby-settings').classList.toggle('hidden', !host);
+    $('btn-preset-short').disabled = !host;
     $('lobby-settings-display').classList.toggle('hidden', host);
     if (document.activeElement !== $('input-money')) $('input-money').value = s.settings.startMoney;
     $('lobby-settings-display').textContent = `Startkapital: ${fmtM(s.settings.startMoney)}`;
@@ -425,6 +427,83 @@
     board.appendChild(center);
   }
 
+  // --- 3D-Ansicht (optional, Three.js) ---
+
+  let b3 = null;            // geladenes Modul
+  let b3Loading = false;
+  let b3Failed = false;
+  let mode3d = false;
+  function webglOk() {
+    try { const c = document.createElement('canvas'); return !!(window.WebGLRenderingContext && (c.getContext('webgl2') || c.getContext('webgl'))); } catch (e) { return false; }
+  }
+  function want3d() {
+    const saved = safeGet('mono_view');
+    if (saved === '2d') return false;
+    if (saved === '3d') return true;
+    return Math.min(window.innerWidth, window.innerHeight) >= 600;
+  }
+  function applyMode() {
+    const col = $('board-col');
+    if (!col) return;
+    col.classList.toggle('mode3d', mode3d);
+    $('board').classList.toggle('mode3d', mode3d);
+    const btn = $('btn-view3d');
+    if (btn) btn.innerHTML = mode3d ? '🗺️<span class="lbl"> 2D</span>' : '🧊<span class="lbl"> 3D</span>';
+    $('btn-reset3d').classList.toggle('hidden', !mode3d);
+  }
+  async function ensure3d() {
+    if (b3 || b3Loading || b3Failed) return;
+    if (!webglOk()) { b3Failed = true; mode3d = false; applyMode(); return; }
+    b3Loading = true;
+    try {
+      const ver = (document.querySelector('.build-id') || {}).textContent || '';
+      const m = await import('./board3d.js?v=' + encodeURIComponent(ver));
+      m.init({
+        container: $('board-col'),
+        SQUARES, GROUPS,
+        onTile: (pos) => { const t = SQUARES[pos].type; if (t === 'property' || t === 'station' || t === 'utility') openProp(pos); },
+        onToken: (id) => openPlayer(id),
+        isPickable: (pos) => { const t = SQUARES[pos].type; return t === 'property' || t === 'station' || t === 'utility'; },
+      });
+      b3 = m;
+      m.setVisible(mode3d);
+      sync3d(true);
+    } catch (e) {
+      console.error('3D nicht verfügbar', e);
+      b3Failed = true; mode3d = false; applyMode();
+    }
+    b3Loading = false;
+  }
+  function sync3d() {
+    if (!b3 || !S || !S.game) return;
+    const g = S.game;
+    b3.setVisible(mode3d);
+    if (!mode3d) return;
+    b3.update({
+      players: g.order.map((id) => {
+        const p = pinfo(id);
+        return { id, color: p ? p.color : '#888', emoji: p ? p.emoji : '?', pos: shownPos[id] !== undefined ? shownPos[id] : g.players[id].pos, inJail: !!g.players[id].inJail, bankrupt: !!g.players[id].bankrupt };
+      }),
+      props: g.props.map((p) => ({ pos: p.pos, owner: p.owner, houses: p.houses, mortgaged: !!p.mortgaged, ownerColor: pcolor(p.owner) })),
+      turnId: g.phase === 'over' ? null : g.turnId,
+      pot: g.pot, freeParking: !!(g.rules && g.rules.freeParking),
+      fast: !!(S.settings && S.settings.speed === 'fast'),
+    });
+  }
+  function setMode3d(on) {
+    mode3d = on;
+    safeSet('mono_view', on ? '3d' : '2d');
+    applyMode();
+    if (on) { if (b3) sync3d(); else ensure3d(); } else if (b3) b3.setVisible(false);
+  }
+  function init3d() {
+    mode3d = want3d() && webglOk();
+    applyMode();
+    if (mode3d) ensure3d();
+    $('btn-view3d').addEventListener('click', () => setMode3d(!mode3d));
+    $('btn-reset3d').addEventListener('click', () => { if (b3) b3.resetView(); });
+  }
+
   // --- Figuren & Bewegungs-Animation ---
 
   const shownPos = {};
@@ -447,6 +526,7 @@
         text: p ? p.emoji : '?',
       }));
     });
+    sync3d();
   }
 
   // Solange Würfel rollen oder Figuren laufen, werden Aktionen im Dock zurückgehalten.
@@ -600,12 +680,13 @@
   function updateDice(g) {
     if (lastRollSeq === null) {
       lastRollSeq = g.rollSeq;
-      if (g.rollSeq > 0) { setDie(diceEls[0], g.dice[0]); setDie(diceEls[1], g.dice[1]); }
+      if (g.rollSeq > 0) { setDie(diceEls[0], g.dice[0]); setDie(diceEls[1], g.dice[1]); if (b3) b3.setDice(g.dice[0], g.dice[1]); }
       return;
     }
     if (g.rollSeq !== lastRollSeq) {
       lastRollSeq = g.rollSeq;
       playDiceSound();
+      if (b3 && mode3d) b3.rollDice(g.dice[0], g.dice[1], T(1150));
       busyUntilDice = Date.now() + T(1300);
       diceEls.forEach((d) => d.classList.add('rolling'));
       clearInterval(rollTimer);
@@ -871,13 +952,21 @@
       refreshAfterIdle();
       return;
     }
-    const key = JSON.stringify([g.phase, g.turnId, g.buy, g.auction, g.debts.length, me && me.money, me && me.inJail, me && me.jailCards, me && me.bankrupt, g.trade && g.trade.id, canSkip, g.doubles]);
+    const key = JSON.stringify([g.phase, g.turnId, g.buy, g.auction, g.debts.length, me && me.money, me && me.inJail, me && me.jailCards, me && me.bankrupt, g.trade && g.trade.id, canSkip, g.doubles, !!(pinfo(id) && pinfo(id).afk)]);
     if (key === dockKey) return;
     dockKey = key;
     box.innerHTML = '';
     $('dock').classList.toggle('my-turn', g.turnId === id && g.phase !== 'over' && !(me && me.bankrupt));
     if (!me || me.bankrupt) { box.appendChild(el('span', { class: 'msg', text: 'Du schaust jetzt nur noch zu.' })); return; }
     if (g.phase === 'over') return;
+    const meP = pinfo(id);
+    if (meP && meP.afk) {
+      box.appendChild(el('span', { class: 'msg', text: '💤 Ein Bot spielt für dich, weil du zu lange gebraucht hast.' }));
+      const b = el('button', { class: 'btn good', text: 'Ich bin wieder da' });
+      b.addEventListener('click', () => socket.emit('comeBack'));
+      box.appendChild(b);
+      return;
+    }
 
     const msg = (html) => box.appendChild(el('span', { class: 'msg', html }));
     const btn = (label, cls, fn, disabled) => {
@@ -1628,6 +1717,7 @@
   function renderGame(s) {
     const g = s.game;
     if (!boardBuilt) { buildBoard(); boardBuilt = true; }
+    if (mode3d && !b3) ensure3d();
 
     $('game-code').textContent = s.code;
     const mine = g.turnId === myId() && g.phase !== 'over';
@@ -1682,6 +1772,7 @@
     if (!S) return;
     if (S.phase === 'lobby') {
       closeAllModals();
+      if (b3) { b3.dispose(); b3 = null; }
       boardBuilt = false;
       lastRollSeq = null; shownCardSeq = null; lastMoveSeq = null; moveQueue.length = 0; boardOwnersInit = false; feedFirst = null; eventSeen = null; eventQueue.length = 0; prevBankrupt = null; lastAuctionSeq = null; lastBidCount = 0; turnKeySeen = null; Object.keys(realMoney).forEach((k) => { delete realMoney[k]; delete dispMoney[k]; }); dockKey = ''; overShown = false; tradeInId = null;
       Object.keys(shownPos).forEach((k) => delete shownPos[k]);
@@ -1722,6 +1813,8 @@
     if (!session) return; // Zustand eines fremden Raums ignorieren
     render();
   });
+
+  init3d();
 
   // "Überspringen" wird nach einer Wartezeit sichtbar - dafür regelmäßig neu prüfen.
   setInterval(() => {

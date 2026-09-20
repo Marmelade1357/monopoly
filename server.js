@@ -237,7 +237,7 @@ function waitInfo(room) {
   if (room.phase !== 'playing' || !g) { room._wait = null; return null; }
   const actor = engine.pendingActors(room).find((a) => {
     const p = findPlayer(room, a.id);
-    return p && !p.isBot && p.connected && a.kind !== 'trade';
+    return p && !p.isBot && p.connected && !p.afk && a.kind !== 'trade';
   });
   if (!actor) { room._wait = null; return null; }
   const key = [g.turnCount, g.phase, g.rollSeq, g.moveSeq, g.auction ? g.auction.highBid + ':' + g.auction.idx : '', g.debts.length].join('|');
@@ -262,6 +262,7 @@ function publicState(room) {
       isBot: p.isBot,
       persona: p.persona || null,
       left: !!p.left,
+      afk: !!p.afk,
       emoji: TOKENS[p.tokenIdx].emoji,
       color: TOKENS[p.tokenIdx].color,
     })),
@@ -299,6 +300,7 @@ function updateAnimLock(room) {
   if (ms > 0) room.animUntil = Math.max(Date.now(), room.animUntil || 0) + (ms * speed + 300) * ANIM_SCALE;
 }
 
+const AFK_AFTER = 3;
 const TIMER_SCALE = process.env.TIMER_SCALE !== undefined ? Number(process.env.TIMER_SCALE) : 1;
 
 // Zug-Timer (Lobby-Regel): Wer zu lange braucht, wird einmalig automatisch gespielt.
@@ -306,7 +308,7 @@ function timerActor(room) {
   if (!room.settings.turnTimer || room.phase !== 'playing' || !room.g || room.g.phase === 'over') return null;
   return engine.pendingActors(room).find((a) => {
     const p = findPlayer(room, a.id);
-    return p && !p.isBot && p.connected && !p.left;
+    return p && !p.isBot && p.connected && !p.left && !p.afk;
   }) || null;
 }
 
@@ -337,6 +339,10 @@ function updateTurnTimer(room) {
     if (!a || timerSig(room, a) !== sig) return;
     const p = findPlayer(room, a.id);
     log(room, `⏱ Zeit abgelaufen – ${p ? p.name : 'Spieler'} wird automatisch gespielt.`);
+    if (p) {
+      p.timeouts = (p.timeouts || 0) + 1;
+      if (p.timeouts >= AFK_AFTER) { p.afk = true; log(room, `💤 ${p.name} war ${AFK_AFTER}x hintereinander zu langsam – ein Bot übernimmt, bis die Person zurückkommt.`); }
+    }
     try {
       autoAct(room, a);
     } catch (err) { console.error('Timer-Fehler:', err); }
@@ -361,7 +367,7 @@ function broadcastState(room) {
 function pickBotActor(room) {
   return engine.pendingActors(room).find((a) => {
     const p = findPlayer(room, a.id);
-    return p && (p.isBot || !p.connected || p.left);
+    return p && (p.isBot || !p.connected || p.left || p.afk);
   });
 }
 
@@ -554,6 +560,7 @@ io.on('connection', (socket) => {
     room.settings.startMoney = clampInt(s.startMoney, 200, 100000, room.settings.startMoney);
     if (s.turnTimer !== undefined) room.settings.turnTimer = [0, 30, 45, 60, 90, 120].includes(Number(s.turnTimer)) ? Number(s.turnTimer) : 0;
     if (s.limit !== undefined) room.settings.limit = /^(none|m(30|45|60|90|120)|r(15|20|30|40|60))$/.test(String(s.limit)) ? String(s.limit) : 'none';
+    if (s.preset === 'short') { room.settings.limit = 'm45'; room.settings.speed = 'fast'; room.settings.turnTimer = 45; room.settings.startMoney = 1500; room.settings.rules.freeParking = false; room.settings.rules.doubleGo = true; }
     if (s.speed !== undefined) room.settings.speed = s.speed === 'fast' ? 'fast' : 'normal';
     if (s.rules && typeof s.rules === 'object') {
       Object.keys(engine.RULE_DEFAULTS).forEach((k) => {
@@ -592,9 +599,21 @@ io.on('connection', (socket) => {
       console.error('Aktionsfehler:', err);
       res = { ok: false, error: 'Interner Fehler.' };
     }
+    if (res.ok) { const me = findPlayer(room, socket.data.playerId); if (me) me.timeouts = 0; }
     touchRoom(room);
     if (res.ok) broadcastState(room);
     reply(res);
+  });
+
+  socket.on('comeBack', () => {
+    const room = roomOf(socket);
+    if (!room) return;
+    const me = findPlayer(room, socket.data.playerId);
+    if (!me || !me.afk) return;
+    me.afk = false; me.timeouts = 0;
+    log(room, `👋 ${me.name} ist wieder da.`);
+    touchRoom(room);
+    broadcastState(room);
   });
 
   socket.on('resetGame', () => {

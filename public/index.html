@@ -78,6 +78,8 @@
     <p id="lobby-settings-display" class="hint hidden"></p>
 
     <h3 class="rules-h">Spielregeln</h3>
+    <div class="rule-item select-rule"><span><b>⚡ Kurzspiel</b><small>Ein Klick: 45 Minuten, Schnell-Tempo, 45-Sekunden-Timer, doppeltes Gehalt auf LOS.</small></span>
+      <button id="btn-preset-short" class="btn small" type="button">Anwenden</button></div>
     <div id="lobby-rules" class="rule-list">
       <div class="rule-item select-rule"><span><b>⏱ Zug-Timer</b><small>Wer zu lange braucht, wird automatisch gespielt (würfeln, nicht kaufen, nicht mitbieten, Zug beenden).</small></span>
         <select id="set-timer"><option value="0">Aus</option><option value="30">30 Sekunden</option><option value="45">45 Sekunden</option><option value="60">60 Sekunden</option><option value="90">90 Sekunden</option><option value="120">2 Minuten</option></select></div>
@@ -109,6 +111,7 @@
       <span id="timer-badge" class="timer-badge hidden"></span>
     </div>
     <div class="game-header-right">
+      <button id="btn-view3d" class="btn ghost small" type="button" title="2D / 3D umschalten">🧊<span class="lbl"> 3D</span></button>
       <button id="btn-show-log" class="btn ghost small" type="button" title="Verlauf">🗒️<span class="lbl"> Verlauf</span></button>
       <button id="btn-toggle-sound" class="btn ghost small" type="button">🔊</button>
       <button id="btn-show-rules" class="btn ghost small" type="button">📜</button>
@@ -125,6 +128,7 @@
     <div class="center-col">
       <div class="board-col" id="board-col">
         <div id="board" class="board"></div>
+        <button id="btn-reset3d" class="reset3d hidden" type="button" title="Ansicht zurücksetzen">🎯 Ansicht</button>
       </div>
       <div id="dock" class="dock">
         <div class="timer-bar hidden" id="timer-bar"><i></i></div>

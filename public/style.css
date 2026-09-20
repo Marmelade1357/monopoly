@@ -637,3 +637,19 @@ input:focus, select:focus { outline: 2px solid var(--accent-bright); }
   .dock { height: 100px; min-height: 100px; padding: 6px 10px; }
   .dock-actions .btn { padding: 8px 12px; font-size: 0.85rem; }
 }
+
+/* ---- 3D-Ansicht ---- */
+.board-col { position: relative; }
+.board3d-canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; outline: none; }
+.reset3d { display: none; position: absolute; right: 8px; top: 8px; z-index: 40; background: rgba(16,35,26,0.8); color: #fff; border: 1px solid rgba(255,255,255,0.3); border-radius: 999px; padding: 5px 12px; font-size: 13px; cursor: pointer; }
+.board-col.mode3d .reset3d { display: block; }
+.board-col.mode3d .reset3d.hidden { display: none; }
+.board.mode3d { background: transparent; border-color: transparent; box-shadow: none; pointer-events: none; }
+.board.mode3d .sq, .board.mode3d .deck, .board.mode3d .logo, .board.mode3d .dice-row { visibility: hidden; }
+.board.mode3d .board-center { position: absolute; inset: 0; grid-area: auto; background: none; padding: 0; display: block; pointer-events: none; }
+.board.mode3d .status-box { position: absolute; left: 1cqw; top: 1cqw; transform: none; text-align: left; z-index: 6; max-width: 62cqw; background: rgba(255,255,255,0.88); box-shadow: 0 0.6cqw 2cqw rgba(0,0,0,0.35); }
+.board.mode3d .center-card, .board.mode3d .auction-panel, .board.mode3d .splash { pointer-events: auto; }
+.board.mode3d .auction-panel { top: 22%; bottom: 22%; }
+.board.mode3d .jail-anim, .board.mode3d .splash { pointer-events: none; }
+@media (max-width: 900px) { .board.mode3d .status-box { font-size: 2.6cqw; } }
+@media (max-width: 520px) { .game-header-right .btn { padding: 4px 7px; } .game-header-right { gap: 4px; } }
