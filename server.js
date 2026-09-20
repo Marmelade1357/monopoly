@@ -10,7 +10,7 @@ const express = require('express');
 const { Server } = require('socket.io');
 
 const engine = require('./src/engine.js');
-const { botAct, autoAct, suggestTrade } = require('./src/bots.js');
+const { botAct, autoAct, suggestTrade, tradeHint } = require('./src/bots.js');
 
 const app = express();
 const server = http.createServer(app);
@@ -279,6 +279,7 @@ function publicState(room) {
       color: TOKENS[p.tokenIdx].color,
     })),
     game,
+    series: seriesView(room),
     logs: room.logs.slice(-60),
     now: Date.now(),
     spectators: room.spectators ? room.spectators.size : 0,
@@ -366,7 +367,36 @@ function updateTurnTimer(room) {
   if (room.turnTimer.unref) room.turnTimer.unref();
 }
 
+// Bestenliste pro Raum: wird einmal pro beendeter Partie fortgeschrieben.
+function recordSeries(room) {
+  const g = room.g;
+  if (!g || g.phase !== 'over' || g.recorded) return;
+  g.recorded = true;
+  const s = room.series || (room.series = { games: 0, rows: {} });
+  s.games++;
+  g.order.forEach((id) => {
+    const p = findPlayer(room, id);
+    const row = s.rows[id] || (s.rows[id] = { id, name: p ? p.name : '?', games: 0, wins: 0, netSum: 0, best: 0 });
+    if (p) row.name = p.name;
+    let nw = 0;
+    try { nw = g.bankrupt[id] ? 0 : engine.netWorth(room, id); } catch (e) { nw = 0; }
+    row.games++;
+    row.netSum += nw;
+    row.best = Math.max(row.best, nw);
+    if (g.winner === id) row.wins++;
+  });
+}
+function seriesView(room) {
+  const s = room.series;
+  if (!s || !s.games) return null;
+  const rows = Object.values(s.rows).filter((r) => findPlayer(room, r.id) && !findPlayer(room, r.id).left)
+    .map((r) => ({ id: r.id, name: r.name, games: r.games, wins: r.wins, avgNet: r.games ? Math.round(r.netSum / r.games) : 0, best: r.best }))
+    .sort((a, b) => (b.wins - a.wins) || (b.avgNet - a.avgNet));
+  return { games: s.games, rows };
+}
+
 function broadcastState(room) {
+  recordSeries(room);
   updateAnimLock(room);
   updateTurnTimer(room);
   io.to(room.code).emit('gameState', publicState(room));
@@ -755,6 +785,19 @@ io.on('connection', (socket) => {
     try { reply(suggestTrade(room, socket.data.playerId, to)); } catch (err) { console.error(err); reply({ ok: false, error: 'Interner Fehler.' }); }
   });
 
+  // Einschätzung, wie ein Bot ein Angebot aufnehmen würde (für das Handelsfenster).
+  socket.on('tradeHint', (data, reply) => {
+    const room = roomOf(socket);
+    if (!room || room.phase !== 'playing' || !room.g || !socket.data.playerId) return reply({ ok: false });
+    if (isRateLimited(`hint:${socket.id}`, 40, 10 * 1000)) return reply({ ok: false });
+    const side = (x) => {
+      const o = x && typeof x === 'object' ? x : {};
+      return { cash: Math.max(0, Math.round(Number(o.cash)) || 0), props: (Array.isArray(o.props) ? o.props : []).map(Number).filter(Number.isInteger).slice(0, 30), cards: Math.max(0, Math.round(Number(o.cards)) || 0) };
+    };
+    if (typeof data.to !== 'string') return reply({ ok: false });
+    try { const h = tradeHint(room, socket.data.playerId, data.to, side(data.give), side(data.get)); reply(h ? { ok: true, hint: h } : { ok: false }); } catch (err) { reply({ ok: false }); }
+  });
+
   socket.on('comeBack', () => {
     const room = roomOf(socket);
     if (!room) return;
@@ -766,10 +809,7 @@ io.on('connection', (socket) => {
     broadcastState(room);
   });
 
-  socket.on('resetGame', () => {
-    const room = roomOf(socket);
-    if (!room) return;
-    if (socket.data.playerId !== room.hostId) return;
+  function backToLobby(room) {
     if (room.botTimer) { clearTimeout(room.botTimer); room.botTimer = null; }
     room.phase = 'lobby';
     room.g = null;
@@ -780,7 +820,32 @@ io.on('connection', (socket) => {
     // Wer die Partie verlassen hat, verschwindet aus der Lobby.
     room.players = room.players.filter((p) => !p.left);
     room.players.forEach((p) => { if (!p.isBot && !p.connected) p.connected = false; });
+  }
+
+  socket.on('resetGame', () => {
+    const room = roomOf(socket);
+    if (!room) return;
+    if (socket.data.playerId !== room.hostId) return;
+    backToLobby(room);
     log(room, 'Zurück zur Lobby. Bereit für eine neue Partie.');
+    touchRoom(room);
+    broadcastState(room);
+  });
+
+  // Revanche: gleiche Runde, gleiche Einstellungen, sofort neue Partie (nur der Host, nur nach Spielende).
+  socket.on('rematch', () => {
+    const room = roomOf(socket);
+    if (!room || room.phase !== 'gameover') return;
+    if (socket.data.playerId !== room.hostId) return;
+    backToLobby(room);
+    if (room.players.length < MIN_PLAYERS || room.players.length > MAX_PLAYERS) {
+      log(room, 'Zurück zur Lobby – für eine Revanche fehlen Mitspielende.');
+      touchRoom(room); broadcastState(room); return;
+    }
+    room.phase = 'playing';
+    flushActs(room, 'Neue Partie gestartet.');
+    engine.initGame(room);
+    log(room, '🔁 Revanche! Neue Partie mit derselben Runde.');
     touchRoom(room);
     broadcastState(room);
   });

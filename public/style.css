@@ -741,3 +741,20 @@ input:focus, select:focus { outline: 2px solid var(--accent-bright); }
 .highlights { list-style: none; margin: 0 0 10px; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 0.88rem; }
 .highlights li { display: flex; gap: 8px; align-items: baseline; }
 .highlights li i { font-style: normal; flex: none; }
+
+.trade-values { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 0.85rem; color: var(--muted, #b9c3d6); margin: 6px 0; }
+.trade-values .bal { font-weight: 800; }
+.trade-values .bal.plus { color: #6fdc8c; }
+.trade-values .bal.minus { color: #ff8a80; }
+.trade-hint { font-size: 0.85rem; margin: 4px 0 0; min-height: 1.2em; }
+.trade-hint.yes { color: #6fdc8c; }
+.trade-hint.maybe { color: #ffd54f; }
+.trade-hint.no { color: #ff8a80; }
+
+#say-bubbles { position: fixed; left: 14px; bottom: 96px; z-index: 60; display: flex; flex-direction: column; gap: 8px; pointer-events: none; max-width: min(360px, calc(100vw - 28px)); }
+.say-bubble { display: flex; align-items: center; gap: 10px; background: rgba(20, 28, 44, 0.94); border: 2px solid var(--pc, #888); border-radius: 16px 16px 16px 4px; padding: 8px 12px; box-shadow: 0 6px 18px rgba(0,0,0,.4); animation: sayIn .3s ease-out; transition: opacity .4s, transform .4s; }
+.say-bubble.out { opacity: 0; transform: translateY(6px); }
+.say-bubble i { font-style: normal; font-size: 1.5rem; }
+.say-bubble b { display: block; font-size: .78rem; color: var(--pc, #ccc); }
+.say-bubble em { font-style: normal; font-size: .9rem; color: #f2f5fb; }
+@keyframes sayIn { from { opacity: 0; transform: translateY(10px) scale(.96); } to { opacity: 1; transform: none; } }

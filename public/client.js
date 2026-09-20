@@ -217,7 +217,8 @@
 
   function resetClientState() {
     resetAnimState();
-    lastRollSeq = null; shownCardSeq = null; lastMoveSeq = null; boardOwnersInit = false; feedFirst = null; eventSeen = null; prevBankrupt = null; lastAuctionSeq = null; lastBidCount = 0; turnKeySeen = null; tradeReplySeen = null; notifiedTurnKey = null;
+    curGameId = null;
+    lastRollSeq = null; shownCardSeq = null; lastMoveSeq = null; boardOwnersInit = false; feedFirst = null; eventSeen = null; prevBankrupt = null; lastAuctionSeq = null; lastBidCount = 0; turnKeySeen = null; tradeReplySeen = null; saySeen = null; notifiedTurnKey = null;
     Object.keys(realMoney).forEach((k) => { delete realMoney[k]; delete dispMoney[k]; });
     Object.keys(shownPos).forEach((k) => delete shownPos[k]);
     dockKey = ''; overShown = false; tradeInId = null; boardBuilt = false;
@@ -1343,10 +1344,11 @@
     const me = g.players[myId()];
     if (!me || me.bankrupt) return;
     if (g.phase === 'auction') return toast('Während einer Auktion kannst du nicht handeln.');
-    if (g.trade) return toast('Es läuft bereits ein Handelsangebot.');
+    if (g.trade && !(preset && preset.counter)) return toast('Es läuft bereits ein Handelsangebot.');
     const others = g.order.filter((id) => id !== myId() && !g.players[id].bankrupt);
     if (!others.length) return toast('Niemand zum Handeln da.');
     draft = {
+      counter: !!(preset && preset.counter),
       to: partnerId && others.includes(partnerId) ? partnerId : others[0],
       give: { cash: Math.min(me.money, (preset && preset.giveCash) || 0), props: new Set((preset && preset.give) || []), cards: (preset && preset.giveCards) || 0 },
       get: { cash: (preset && preset.getCash) || 0, props: new Set((preset && preset.get) || []), cards: (preset && preset.getCards) || 0 },
@@ -1439,6 +1441,33 @@
     return parts.length ? parts.join(', ') : 'nichts';
   }
 
+  function sideValue(side) {
+    let v = side.cash || 0;
+    Array.from(side.props).forEach((pos) => { const q = propOf(pos); v += q && q.mortgaged ? Math.round(SQUARES[pos].price / 2) : SQUARES[pos].price; });
+    v += (side.cards || 0) * 50;
+    return v;
+  }
+  let hintTimer = null, hintSeq = 0;
+  function requestHint() {
+    clearTimeout(hintTimer);
+    const box = document.getElementById('trade-hint');
+    if (!box) return;
+    const p = draft && pinfo(draft.to);
+    if (!draft || !p || !p.isBot || draft.counter) { box.textContent = ''; return; }
+    const my = ++hintSeq;
+    hintTimer = setTimeout(() => {
+      if (!draft) return;
+      const to = draft.to;
+      socket.emit('tradeHint', { to, give: { cash: draft.give.cash, props: Array.from(draft.give.props), cards: draft.give.cards }, get: { cash: draft.get.cash, props: Array.from(draft.get.props), cards: draft.get.cards } }, (res) => {
+        const b = document.getElementById('trade-hint');
+        if (!b || my !== hintSeq || !draft || draft.to !== to) return;
+        if (!res || !res.ok || !res.hint) { b.textContent = ''; return; }
+        b.className = 'trade-hint ' + res.hint.level;
+        b.textContent = `${pname(to)} (Bot): ${res.hint.text}`;
+      });
+    }, 350);
+  }
+
   function renderTradeSummary() {
     const s = document.getElementById('trade-summary');
     if (!s || !draft) return;
@@ -1447,6 +1476,14 @@
     const bs = s.querySelectorAll('b');
     bs[0].textContent = sideText(draft.give);
     bs[1].textContent = sideText(draft.get);
+    const gv = sideValue(draft.give), rv = sideValue(draft.get);
+    const diff = rv - gv;
+    s.appendChild(el('div', { class: 'trade-values' }, [
+      el('span', { text: `Wert: du gibst ≈ ${fmtM(gv)}` }), el('span', { text: `du erhältst ≈ ${fmtM(rv)}` }),
+      el('span', { class: 'bal ' + (diff > 0 ? 'plus' : diff < 0 ? 'minus' : ''), text: `Saldo ${diff > 0 ? '+' : ''}${fmtM(diff)}` }),
+    ]));
+    s.appendChild(el('div', { id: 'trade-hint', class: 'trade-hint' }));
+    requestHint();
   }
 
   function renderTradeModal() {
@@ -1454,7 +1491,7 @@
     const g = S.game;
     const body = $('trade-modal-body');
     body.innerHTML = '';
-    body.appendChild(el('h2', { text: '🤝 Handelsangebot' }));
+    body.appendChild(el('h2', { text: draft.counter ? '🔁 Gegenangebot' : '🤝 Handelsangebot' }));
 
     const sel = el('select', {});
     g.order.filter((id) => id !== myId() && !g.players[id].bankrupt).forEach((id) => {
@@ -1468,6 +1505,7 @@
       draft.note = '';
       renderTradeModal();
     });
+    if (draft.counter) sel.disabled = true;
     body.appendChild(el('label', { class: 'hint', style: 'display:block;margin:0 0 4px', text: 'Handeln mit' }));
     const sugBtn = el('button', { class: 'btn ghost small', type: 'button', text: '💡 Vorschlag' });
     sugBtn.title = 'Ein faires Angebot für diese Person vorschlagen lassen';
@@ -1483,7 +1521,7 @@
         renderTradeModal();
       });
     });
-    body.appendChild(el('div', { class: 'trade-partner-row' }, [sel, sugBtn]));
+    body.appendChild(el('div', { class: 'trade-partner-row' }, draft.counter ? [sel] : [sel, sugBtn]));
     if (draft.note) body.appendChild(el('p', { class: 'hint suggestion', text: draft.note }));
 
     body.appendChild(tradeTips());
@@ -1494,16 +1532,16 @@
     body.appendChild(el('div', { class: 'trade-summary', id: 'trade-summary' }));
     body.appendChild(el('p', { class: 'hint', style: 'margin:4px 0', text: 'Beliehene Grundstücke kosten den neuen Besitzer sofort 10 % Zinsen.' }));
 
-    const send = el('button', { class: 'btn good', text: 'Angebot senden' });
+    const send = el('button', { class: 'btn good', text: draft.counter ? 'Gegenangebot senden' : 'Angebot senden' });
     send.addEventListener('click', () => {
       act({
-        type: 'proposeTrade', to: draft.to,
+        type: draft.counter ? 'counterTrade' : 'proposeTrade', to: draft.to,
         give: { cash: draft.give.cash, props: Array.from(draft.give.props), cards: draft.give.cards },
         get: { cash: draft.get.cash, props: Array.from(draft.get.props), cards: draft.get.cards },
-      }, (res) => { if (res && res.ok) { hide($('trade-modal')); draft = null; toast('Angebot gesendet.'); } });
+      }, (res) => { if (res && res.ok) { hide($('trade-modal')); draft = null; toast(draft === null && S && S.game && S.game.trade && S.game.trade.counterOf ? 'Gegenangebot gesendet.' : 'Angebot gesendet.'); } });
     });
     const cancel = el('button', { class: 'btn ghost', text: 'Abbrechen' });
-    cancel.addEventListener('click', () => { hide($('trade-modal')); draft = null; });
+    cancel.addEventListener('click', () => { const wasCounter = draft && draft.counter; hide($('trade-modal')); draft = null; if (wasCounter && tradeInId !== null) show($('trade-in-modal')); });
     body.appendChild(el('div', { class: 'row-btns' }, [cancel, send]));
     renderTradeSummary();
   }
@@ -1517,12 +1555,15 @@
       if (tradeInId !== null) { tradeInId = null; hide(modal); }
       return;
     }
-    if (tradeInId === t.id) return;
+    if (tradeInId === t.id) {
+      if ($('trade-in-modal').classList.contains('hidden') && $('trade-modal').classList.contains('hidden')) show($('trade-in-modal'));
+      return;
+    }
     tradeInId = t.id;
     playCardSound(); vibrate(100);
     const body = $('trade-in-body');
     body.innerHTML = '';
-    body.appendChild(el('h2', { text: `🤝 Angebot von ${pname(t.from)}` }));
+    body.appendChild(el('h2', { text: `${t.counterOf ? '🔁 Gegenangebot' : '🤝 Angebot'} von ${pname(t.from)}` }));
     const side = (title, sideData) => {
       const box = el('div', { class: 'trade-col' }, [el('h4', { text: title })]);
       if (sideData.cash) box.appendChild(el('div', { text: fmtM(sideData.cash), style: 'font-weight:800;color:var(--gold-bright);margin-bottom:6px' }));
@@ -1534,12 +1575,16 @@
       return box;
     };
     body.appendChild(el('div', { class: 'trade-cols' }, [side('Du erhältst', t.give), side('Du gibst', t.get)]));
+    const inV = sideValue(t.give), outV = sideValue(t.get), dv = inV - outV;
+    body.appendChild(el('div', { class: 'trade-values' }, [
+      el('span', { text: `Wert: du erhältst ≈ ${fmtM(inV)}` }), el('span', { text: `du gibst ≈ ${fmtM(outV)}` }),
+      el('span', { class: 'bal ' + (dv > 0 ? 'plus' : dv < 0 ? 'minus' : ''), text: `Saldo ${dv > 0 ? '+' : ''}${fmtM(dv)}` }),
+    ]));
     const counter = el('button', { class: 'btn secondary', text: '↩ Gegenangebot' });
+    if (t.counterOf) counter.style.display = 'none';
     counter.addEventListener('click', () => {
-      act({ type: 'cancelTrade' }, (res) => {
-        if (!res || !res.ok) return;
-        setTimeout(() => openTrade(t.from, { give: t.get.props, giveCash: t.get.cash, giveCards: t.get.cards, get: t.give.props, getCash: t.give.cash, getCards: t.give.cards }), 250);
-      });
+      hide(modal);
+      openTrade(t.from, { counter: true, give: t.get.props, giveCash: t.get.cash, giveCards: t.get.cards, get: t.give.props, getCash: t.give.cash, getCards: t.give.cards });
     });
     const no = el('button', { class: 'btn ghost', text: 'Ablehnen' });
     no.addEventListener('click', () => act({ type: 'cancelTrade' }));
@@ -1620,13 +1665,30 @@
     });
     body.appendChild(list);
     body.appendChild(statsBlock(g));
+    if (s.series && s.series.games) {
+      const sr = s.series;
+      body.appendChild(el('div', { class: 'hl-title', text: `🏅 Bestenliste – ${sr.games} ${sr.games === 1 ? 'Partie' : 'Partien'} in dieser Runde` }));
+      const head = el('tr', {}, ['Spieler', 'Siege', 'Partien', 'Ø Vermögen', 'Bestwert'].map((t) => el('th', { text: t })));
+      const topWins = Math.max(...sr.rows.map((r) => r.wins));
+      const rows = sr.rows.map((r) => el('tr', {}, [
+        el('td', {}, [tokdot(r.id, true), document.createTextNode(' ' + r.name)]),
+        el('td', { class: r.wins === topWins && topWins > 0 ? 'best' : '', text: String(r.wins) }),
+        el('td', { text: String(r.games) }),
+        el('td', { text: fmtM(r.avgNet) }),
+        el('td', { text: fmtM(r.best) }),
+      ]));
+      body.appendChild(el('table', { class: 'stats-table' }, [head].concat(rows)));
+    }
     modal.querySelector('.modal-content').classList.add('over-wide');
     if (isHost()) {
-      const b = el('button', { class: 'btn primary', text: 'Neue Partie (zurück zur Lobby)' });
+      const re = el('button', { class: 'btn primary', text: '🔁 Revanche mit derselben Runde' });
+      re.addEventListener('click', () => { re.disabled = true; socket.emit('rematch'); });
+      body.appendChild(re);
+      const b = el('button', { class: 'btn ghost', style: 'margin-top:6px', text: 'Zurück zur Lobby' });
       b.addEventListener('click', () => socket.emit('resetGame'));
       body.appendChild(b);
     } else {
-      body.appendChild(el('p', { class: 'hint', style: 'text-align:center', text: 'Warte, bis der Host eine neue Partie startet …' }));
+      body.appendChild(el('p', { class: 'hint', style: 'text-align:center', text: 'Warte, bis der Host eine Revanche oder neue Partie startet …' }));
     }
     const leave = el('button', { class: 'btn ghost small', style: 'margin:10px auto 0;display:flex', text: 'Verlassen' });
     leave.addEventListener('click', leaveToHome);
@@ -1911,6 +1973,21 @@
     if (!eventRunning && eventQueue.length) runEvents();
   }
 
+  let saySeen = null;
+  function handleSay(g) {
+    const r = g.say;
+    if (saySeen === null) { saySeen = r ? r.seq : 0; return; }
+    if (!r || r.seq <= saySeen) return;
+    saySeen = r.seq;
+    const p = pinfo(r.id);
+    if (!p) return;
+    let box = document.getElementById('say-bubbles');
+    if (!box) { box = el('div', { id: 'say-bubbles', 'aria-live': 'polite' }); document.body.appendChild(box); }
+    while (box.children.length >= 2) box.firstChild.remove();
+    const b = el('div', { class: 'say-bubble', style: `--pc:${p.color}` }, [el('i', { text: p.emoji }), el('span', {}, [el('b', { text: p.name }), el('em', { text: r.text })])]);
+    box.appendChild(b);
+    setTimeout(() => { b.classList.add('out'); setTimeout(() => b.remove(), 400); }, 5200);
+  }
   let tradeReplySeen = null;
   function handleTradeReply(g) {
     const r = g.tradeReply;
@@ -1984,6 +2061,7 @@
     handleEvents(g);
     handleBust(g);
     handleTradeReply(g);
+    handleSay(g);
     trackMoney(g);
     renderHud(g);
     renderPlayersPanel(s);
@@ -2008,8 +2086,10 @@
     }
   }
 
+  let curGameId = null;
   function render() {
     if (!S) return;
+    if (S.game && S.game.gameId !== curGameId) { if (curGameId !== null) resetClientState(); curGameId = S.game.gameId; }
     if (S.phase === 'lobby') {
       closeAllModals();
       resetClientState();

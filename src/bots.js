@@ -130,7 +130,23 @@ function decideTrade(room, id) {
   else if (t.get.cash > g.money[id] * 0.6) reason = 'Dafür habe ich gerade zu wenig Geld.';
   else if (receives < gives * 0.6) reason = 'Das ist mir deutlich zu wenig.';
   else reason = 'Ein bisschen mehr müsste es schon sein.';
+  const counter = !t.counterOf && breaks === null && needs === null ? counterFor(room, id, t, receives, gives) : null;
+  if (counter) return counter;
   return { type: 'cancelTrade', reason };
+}
+
+// Gegenangebot eines Bots: gleiche Sachen, aber mit so viel Aufschlag in Bargeld, dass es für ihn passt.
+function counterFor(room, id, t, receives, gives) {
+  const g = room.g;
+  if (t.to !== id || room.players.some((p) => p.id === t.from && p.isBot)) return null;
+  const need = gives * persona(room, id).tradeAccept;
+  const gap = Math.ceil((need - receives) / 10) * 10;
+  if (gap <= 0 || gap > gives * 0.6) return null;
+  const proposerCash = g.money[t.from] - t.give.cash;
+  if (gap > proposerCash - 50) return null;
+  const c = { id: 0, from: id, to: t.from, give: { cash: t.get.cash, props: t.get.props.slice(), cards: t.get.cards }, get: { cash: t.give.cash + gap, props: t.give.props.slice(), cards: t.give.cards } };
+  if (E.tradeError(room, c)) return null;
+  return { type: 'counterTrade', give: c.give, get: c.get };
 }
 
 // Fairer Vorschlag für `from` an `to` (für den Knopf "Vorschlag" im Handelsfenster).
@@ -180,6 +196,20 @@ function suggestTrade(room, from, to) {
 // Pro Zug höchstens ein Angebot; nach jedem Angebot wird das nächste großzügiger.
 function tradeIdea(room, id) {
   const g = room.g;
+  const rt = g.tradeRetry;
+  if (rt && rt.bot === id && !g.trade) {
+    g.tradeRetry = null;
+    const pr = g.props[rt.pos];
+    const target = room.players.find((p) => p.id === rt.to);
+    if (rt.turn === g.turnCount && rt.tries < 3 && pr && pr.owner === rt.to && target && !g.bankrupt[rt.to]) {
+      const offer = Math.ceil((rt.amount * 1.25 + 10) / 10) * 10;
+      if (g.money[id] - offer >= 100 && offer <= valueOf(g, id, rt.pos) * 2.4) {
+        g.tradeRetry = { bot: id, to: rt.to, pos: rt.pos, amount: offer, turn: rt.turn, tries: rt.tries };
+        g.tradeReply = { seq: ++g.tradeReplySeq, by: id, to: rt.to, text: `Na gut – dann lege ich etwas drauf: ${offer} ₮.` };
+        return { type: 'proposeTrade', to: rt.to, give: { cash: offer, props: [], cards: 0 }, get: { cash: 0, props: [rt.pos], cards: 0 } };
+      }
+    }
+  }
   if (g.trade || (g.botTradeTurn && g.botTradeTurn[id] === g.turnCount)) return null;
   const botIds = new Set(room.players.filter((p) => p.isBot).map((p) => p.id));
   const humanIds = new Set(room.players.filter((p) => !p.isBot && p.connected && !p.left && !p.afk).map((p) => p.id));
@@ -250,7 +280,7 @@ function decide(room, actor) {
       return { type: 'bid', amount: Math.min(max, minRaise + step - 1) };
     }
     case 'end':
-      return manage(room, id) || { type: 'endTurn' };
+      return tradeIdea(room, id) || manage(room, id) || { type: 'endTurn' };
     case 'debt':
       return decideDebt(room, id);
     case 'trade':
@@ -306,4 +336,22 @@ function autoAct(room, actor) {
   return res.ok;
 }
 
-module.exports = { botAct, autoAct, decide, PERSONAS, suggestTrade };
+// Einschätzung für das Handelsfenster: Wie würde der Bot `to` dieses Angebot von `from` aufnehmen?
+function tradeHint(room, from, to, give, get) {
+  const g = room.g;
+  const p = room.players.find((x) => x.id === to);
+  if (!g || !p || !p.isBot) return null;
+  const t = { id: 0, from, to, give, get };
+  if (E.tradeError(room, t)) return null;
+  const { receives, gives, breaks, needs } = evalTrade(room, to, t);
+  const paying = get.cash;
+  if (paying > 0 && g.money[to] - paying < 150) return { level: 'no', text: 'Dafür hat er zu wenig Geld übrig.' };
+  if (breaks !== null) return { level: 'no', text: 'Er müsste ein Farbset aufgeben – sehr unwahrscheinlich.' };
+  const acc = persona(room, to).tradeAccept;
+  const ratio = gives > 0 ? receives / (gives * acc) : (receives > 0 ? 2 : 0);
+  if (receives > 0 && ratio >= 1) return { level: 'yes', text: 'Er wird wohl zustimmen.' };
+  if (ratio >= 0.8) return { level: 'maybe', text: needs !== null ? 'Knapp – er braucht das Grundstück selbst, könnte aber ein Gegenangebot machen.' : 'Knapp – vielleicht ein Gegenangebot.' };
+  return { level: 'no', text: 'Eher nein – das ist ihm zu wenig.' };
+}
+
+module.exports = { botAct, autoAct, decide, PERSONAS, suggestTrade, tradeHint };

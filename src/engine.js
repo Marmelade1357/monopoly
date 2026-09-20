@@ -15,6 +15,7 @@
 
 const BOARD = require('../public/board-data.js');
 const CARDS = require('./cards.js');
+const banter = require('./banter.js');
 
 const { SQUARES, GROUPS, GROUP_POSITIONS } = BOARD;
 
@@ -160,6 +161,7 @@ function initGame(room) {
     turnCount: 0,
     round: 1,
     startedAt: Date.now(),
+    gameId: Date.now() + '-' + Math.floor((room.rng || Math.random)() * 1e6),
     stats: {},
     events: [],
     eventSeq: 0,
@@ -253,7 +255,7 @@ function checkWinner(room) {
   room.phase = 'gameover';
   const ranking = g.winner ? [g.winner].concat(g.placements.slice().reverse()) : g.placements.slice().reverse();
   g.ranking = ranking;
-  if (g.winner) log(room, `🏆 ${nameOf(room, g.winner)} hat gewonnen und beherrscht Entenhausen!`);
+  if (g.winner) { log(room, `🏆 ${nameOf(room, g.winner)} hat gewonnen und beherrscht Entenhausen!`); try { banter.say(room, g.winner, 'win'); } catch (e) { /* Deko */ } }
   return true;
 }
 
@@ -393,6 +395,7 @@ function sendToJail(room, id) {
   g.next = 'end';
   recordMove(g, { id, from, to: JAIL_POS, kind: 'jail' });
   log(room, `🚔 ${nameOf(room, id)} landet im Panzerknacker-Knast!`);
+  try { banter.say(room, id, 'jail'); } catch (e) { /* Deko */ }
 }
 
 function computeRent(room, sq, ctx) {
@@ -439,6 +442,13 @@ function landOn(room, id, ctx) {
       recordEvent(g, { kind: 'rent', payer: id, owner: p.owner, pos: sq.pos, amount: rent });
       if (!g.hl.bigRent || rent > g.hl.bigRent.amount) g.hl.bigRent = { payer: id, owner: p.owner, pos: sq.pos, amount: rent, round: g.round };
       pay(room, id, p.owner, rent, `Miete für ${sq.name}`);
+      try {
+        const isBot = (x) => room.players.some((q) => q.id === x && q.isBot);
+        const vars = { n: nameOf(room, id), amt: fmt(rent), sq: sq.name };
+        if (isBot(p.owner) && rent >= 50) banter.say(room, p.owner, 'rentIn', vars);
+        else if (isBot(id) && rent >= 150) banter.say(room, id, 'rentOut', Object.assign({}, vars, { n: nameOf(room, p.owner) }));
+        else if (!isBot(id) && rent >= 100) banter.onlooker(room, 'laugh', vars, [id, p.owner]);
+      } catch (e) { /* Sprüche sind nur Deko */ }
       return;
     }
     case 'tax':
@@ -631,6 +641,7 @@ function buy(room, id) {
   g.stats[id].bought++;
   g.buy = null;
   log(room, `🏠 ${nameOf(room, id)} kauft ${sq.name} für ${fmt(sq.price)}.`);
+  try { banter.say(room, id, 'buy', { sq: sq.name }); } catch (e) { /* Deko */ }
   proceed(room);
   return ok();
 }
@@ -914,6 +925,22 @@ function proposeTrade(room, id, a) {
   return ok();
 }
 
+// Gegenangebot: die angesprochene Person ersetzt das Angebot durch ein eigenes (give = was sie gibt, get = was sie bekommt).
+function counterTrade(room, id, a) {
+  const g = room.g;
+  const err = canManage(room, id);
+  if (err) return fail(err);
+  const old = g.trade;
+  if (!old || old.to !== id) return fail('Kein Angebot für dich.');
+  if (old.counterOf) return fail('Auf ein Gegenangebot gibt es kein weiteres Gegenangebot – nimm an oder lehne ab.');
+  const t = { id: ++g.tradeSeq, from: id, to: old.from, give: cleanSide(a.give), get: cleanSide(a.get), counterOf: old.id };
+  const e = tradeError(room, t);
+  if (e) return fail(e);
+  g.trade = t;
+  log(room, `🔁 ${nameOf(room, id)} macht ${nameOf(room, t.to)} ein Gegenangebot.`);
+  return ok();
+}
+
 function cancelTrade(room, id, a) {
   const g = room.g;
   if (!g.trade || (g.trade.from !== id && g.trade.to !== id)) return fail('Kein Angebot vorhanden.');
@@ -924,6 +951,14 @@ function cancelTrade(room, id, a) {
     ? `${nameOf(room, id)} lehnt das Angebot von ${nameOf(room, g.trade.from)} ab${reason ? ': „' + reason + '“' : '.'}`
     : `${nameOf(room, id)} zieht das Angebot zurück.`);
   if (reason) g.tradeReply = { seq: ++g.tradeReplySeq, by: id, to: g.trade.from, text: reason };
+  if (declined) {
+    const t0 = g.trade;
+    const fromBot = room.players.some((x) => x.id === t0.from && x.isBot);
+    if (fromBot && !t0.counterOf && t0.give.cash > 0 && !t0.give.props.length && t0.get.props.length === 1 && !t0.get.cash) {
+      const prev = g.tradeRetry && g.tradeRetry.bot === t0.from && g.tradeRetry.turn === g.turnCount ? g.tradeRetry.tries : 0;
+      g.tradeRetry = { bot: t0.from, to: id, pos: t0.get.props[0], amount: t0.give.cash, turn: g.turnCount, tries: prev + 1 };
+    }
+  }
   g.trade = null;
   return ok();
 }
@@ -958,6 +993,7 @@ function acceptTrade(room, id) {
   };
   log(room, `🤝 Handel: ${nameOf(room, t.from)} gibt ${desc(t.give)} an ${nameOf(room, t.to)} und erhält ${desc(t.get)}.`);
   g.trade = null;
+  try { banter.say(room, t.to, 'tradeYes', { n: nameOf(room, t.from) }); } catch (e) { /* Deko */ }
   if (g.debts.length) proceed(room);
   return ok();
 }
@@ -991,6 +1027,7 @@ function declareBankrupt(room, id) {
   const cash = g.money[id];
   g.money[id] = 0;
   log(room, `💥 ${nameOf(room, id)} ist pleite${creditor ? ' – alles geht an ' + nameOf(room, creditor) : ' – alles geht an die Bank'}.`);
+  try { banter.say(room, id, 'bust'); } catch (e) { /* Deko */ }
 
   if (creditor) {
     g.money[creditor] += cash;
@@ -1063,6 +1100,7 @@ function afterAct(room) {
       g.hl.monopolies.push({ id: owner, group, round: g.round });
       recordEvent(g, { kind: 'monopoly', id: owner, group, pos: ps[Math.floor(ps.length / 2)] });
       log(room, `🌟 ${nameOf(room, owner)} besitzt jetzt die ganze Farbgruppe ${GROUPS[group].name} – Monopol!`);
+      try { banter.say(room, owner, 'monopoly'); } catch (e) { /* Deko */ }
     }
   });
   if (g.housesLeft >= 10) { g.shortWarn = false; g.shortZero = false; }
@@ -1098,6 +1136,7 @@ function actInner(room, id, a) {
     case 'unmortgage': return unmortgage(room, id, Number(a.pos));
     case 'proposeTrade': return proposeTrade(room, id, a);
     case 'acceptTrade': return acceptTrade(room, id);
+    case 'counterTrade': return counterTrade(room, id, a);
     case 'cancelTrade': return cancelTrade(room, id, a);
     case 'resign': return declareBankrupt(room, id);
     default: return fail('Unbekannte Aktion.');
@@ -1192,10 +1231,12 @@ function snapshot(room) {
     stats: g.stats,
     hl: g.hl,
     tradeReply: g.tradeReply,
+    say: g.say || null,
     events: g.events,
     limit: (function () { const l = limitOf(room); return l ? { mode: l.mode, value: l.value, endsAt: l.mode === 'minutes' ? g.startedAt + l.value * 60000 : null } : null; })(),
     limitReached: g.limitReached,
     ranking: g.ranking || null,
+    gameId: g.gameId,
     turnCount: g.turnCount,
   };
 }
