@@ -705,3 +705,5 @@ input:focus, select:focus { outline: 2px solid var(--accent-bright); }
 .mode3d-ui.panels-off .board.mode3d .status-box { left: 50%; transform: translateX(-50%); top: 1cqw; text-align: center; }
 .build-hint { border-color: #f4c95d; color: #f4c95d; }
 @media (max-width: 900px) { #btn-panels, .vol { display: none !important; } }
+
+#btn-hands3d.off { opacity: 0.55; }

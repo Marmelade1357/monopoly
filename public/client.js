@@ -525,6 +525,11 @@
       }),
       props: g.props.map((p) => ({ pos: p.pos, owner: p.owner, houses: p.houses, mortgaged: !!p.mortgaged, ownerColor: pcolor(p.owner), ownerEmoji: (pinfo(p.owner) || {}).emoji || '' })),
       turnId: g.phase === 'over' ? null : g.turnId,
+      hands: g.order.filter((id) => !g.players[id].bankrupt).map((id) => {
+        const p = pinfo(id) || {};
+        return { id, name: p.name || '?', emoji: p.emoji || '', color: p.color || '#888', me: id === myId(), jail: g.players[id].jailCards || 0,
+          cards: g.props.filter((x) => x.owner === id).map((x) => ({ pos: x.pos, houses: x.houses, mortgaged: !!x.mortgaged })) };
+      }),
       pot: g.pot, freeParking: !!(g.rules && g.rules.freeParking),
       fast: !!(S.settings && S.settings.speed === 'fast'),
     });
@@ -545,7 +550,10 @@
     $('btn-top3d').addEventListener('click', () => { if (!b3 || !b3.setTopDown) return; top = !b3.isTopDown(); b3.setTopDown(top); $('btn-top3d').textContent = top ? '🧭 Schräg' : '⬆️ Von oben'; });
     $('btn-cam3d').addEventListener('click', () => { camMode = CAMS[(CAMS.findIndex((x) => x[0] === camMode) + 1) % CAMS.length][0]; safeSet('mono_cam', camMode); applyCam(); });
     let light = safeGet('mono_light') === 'evening' ? 'evening' : 'day';
-    const applyLight = () => { $('btn-light3d').textContent = light === 'evening' ? '☀️' : '🌙'; if (b3 && b3.setLightMode) b3.setLightMode(light); };
+    let hands = safeGet('mono_hands') !== 'off';
+    const applyHands = () => { $('btn-hands3d').classList.toggle('off', !hands); if (b3 && b3.setHands) b3.setHands(hands); };
+    $('btn-hands3d').addEventListener('click', () => { hands = !hands; safeSet('mono_hands', hands ? 'on' : 'off'); applyHands(); });
+    const applyLight = () => { applyHands(); $('btn-light3d').textContent = light === 'evening' ? '☀️' : '🌙'; if (b3 && b3.setLightMode) b3.setLightMode(light); };
     $('btn-light3d').addEventListener('click', () => { light = light === 'evening' ? 'day' : 'evening'; safeSet('mono_light', light); applyLight(); });
     $('btn-rotl3d').addEventListener('click', () => { if (b3 && b3.rotateView) b3.rotateView(-1); });
     $('btn-rotr3d').addEventListener('click', () => { if (b3 && b3.rotateView) b3.rotateView(1); });

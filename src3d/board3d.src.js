@@ -1011,7 +1011,7 @@ function fitDistance() {
   camera.updateProjectionMatrix();
   const el = (elevDeg * Math.PI) / 180;
   const dir = new THREE.Vector3(0, Math.sin(el), Math.cos(el));
-  const corners = [[-1, -1], [1, -1], [-1, 1], [1, 1]].map(([x, z]) => new THREE.Vector3(x * (S / 2 + 0.4), 0, z * (S / 2 + 0.4)));
+  const corners = [[-1, -1], [1, -1], [-1, 1], [1, 1]].map(([x, z]) => new THREE.Vector3(x * (S / 2 + (handsOn ? 2.25 : 0.4)), 0, z * (S / 2 + (handsOn ? 2.25 : 0.4))));
   let lo = 6, hi = 80;
   const tmp = camera.clone();
   for (let i = 0; i < 18; i++) {
@@ -1167,7 +1167,7 @@ function tick() {
 
 export function init(opts) {
   O = opts;
-  tileMeshes = []; tokens = {}; dice = []; potTile = null; hoverPos = null; interactUntil = 0; viewState = { turnId: null }; tweens = []; lastPot = null; decks = []; firstUpdate = true;
+  tileMeshes = []; tokens = {}; dice = []; potTile = null; hoverPos = null; interactUntil = 0; viewState = { turnId: null }; tweens = []; lastPot = null; decks = []; firstUpdate = true; handsGroup = null; handMeshes = []; handKey = ''; handSeen = new Set();
   container = opts.container;
   canvas = document.createElement('canvas');
   canvas.className = 'board3d-canvas';
@@ -1267,6 +1267,10 @@ function pick(e) {
   const pawns = Object.values(tokens).filter((t) => t.group.visible).flatMap((t) => [t.pawn, t.sprite]);
   const ph = raycaster.intersectObjects(pawns, true)[0];
   if (ph && ph.object.userData.tid) return { token: ph.object.userData.tid };
+  if (handsGroup && handsGroup.visible) {
+    const hh = raycaster.intersectObjects(handMeshes, false)[0];
+    if (hh && hh.object.userData.pos !== undefined) return { pos: hh.object.userData.pos };
+  }
   const th = raycaster.intersectObjects(tileMeshes.map((t) => t.top), false)[0];
   if (th) return { pos: th.object.userData.pos };
   return null;
@@ -1284,6 +1288,144 @@ export function setVisible(v) {
     canvas.style.opacity = '0';
     setTimeout(() => { if (!visible) canvas.style.display = 'none'; }, 350);
   }
+}
+
+
+// --- Kartenhände: eigene Karten vorne (LOS-Seite), die der anderen an den übrigen Seiten ---
+let handsOn = true, handsGroup = null, handMeshes = [], handKey = '', handSeen = new Set();
+const handTexCache = new Map();
+const HAND_R0 = S / 2 + 0.5, HAND_W = 1.1, HAND_H = 0.62, HAND_STEP = 0.24;
+const SEATS = { 1: ['N'], 2: ['W', 'E'], 3: ['W', 'N', 'E'], 4: ['W', 'N', 'N', 'E'], 5: ['W', 'N', 'N', 'E', 'E'] };
+const SEAT_ROT = { S: 0, W: -Math.PI / 2, N: Math.PI, E: Math.PI / 2 };
+
+export function setHands(on) {
+  on = !!on;
+  if (on === handsOn) return;
+  handsOn = on;
+  if (handsGroup) handsGroup.visible = on;
+  if (camera && controls) resetView();
+}
+
+function handCardTex(sq, houses, mort) {
+  const key = `${sq.pos}:${houses}:${mort ? 1 : 0}`;
+  let t = handTexCache.get(key);
+  if (t) return t;
+  const cv = document.createElement('canvas');
+  cv.width = 256; cv.height = 144;
+  const x = cv.getContext('2d');
+  const grp = O.GROUPS[sq.group];
+  x.fillStyle = '#f7f3e4'; x.fillRect(0, 0, 256, 144);
+  x.fillStyle = grp.color; x.fillRect(0, 0, 256, 26);
+  x.textBaseline = 'middle';
+  let size = 30;
+  const maxW = houses ? 196 : 236;
+  for (; size > 15; size -= 1) { x.font = `700 ${size}px ${FONT}`; if (x.measureText(sq.name).width <= maxW) break; }
+  x.fillStyle = '#1b1b1b'; x.textAlign = 'left';
+  x.fillText(sq.name, 10, 46);
+  if (houses) { x.textAlign = 'right'; x.font = `600 24px ${FONT}`; x.fillText(houses >= 5 ? '🏨' : '🏠' + houses, 248, 46); }
+  x.textAlign = 'left'; x.fillStyle = '#555'; x.font = `500 22px ${FONT}`;
+  x.fillText(`${sq.price} ₮`, 10, 100);
+  if (mort) { x.fillStyle = 'rgba(50,50,50,0.55)'; x.fillRect(0, 0, 256, 144); x.fillStyle = '#fff'; x.font = `700 26px ${FONT}`; x.textAlign = 'center'; x.fillText('Hypothek', 128, 96); }
+  x.strokeStyle = '#8a8470'; x.lineWidth = 4; x.strokeRect(2, 2, 252, 140);
+  t = tex(cv); handTexCache.set(key, t);
+  return t;
+}
+function handJailTex() {
+  let t = handTexCache.get('jail');
+  if (t) return t;
+  const cv = document.createElement('canvas'); cv.width = 256; cv.height = 144;
+  const x = cv.getContext('2d');
+  x.fillStyle = '#ffe9a8'; x.fillRect(0, 0, 256, 144);
+  x.fillStyle = '#e39b1b'; x.fillRect(0, 0, 256, 26);
+  x.textBaseline = 'middle'; x.fillStyle = '#1b1b1b'; x.font = `700 28px ${FONT}`;
+  x.fillText('🔑 Freikarte', 10, 46);
+  x.fillStyle = '#6a5510'; x.font = `500 20px ${FONT}`; x.fillText('Knast-Freikarte', 10, 100);
+  x.strokeStyle = '#a58322'; x.lineWidth = 4; x.strokeRect(2, 2, 252, 140);
+  t = tex(cv); handTexCache.set('jail', t);
+  return t;
+}
+function handTagTex(h, active) {
+  const cv = document.createElement('canvas'); cv.width = 512; cv.height = 96;
+  const x = cv.getContext('2d');
+  const r = 44;
+  x.fillStyle = active ? 'rgba(60,44,8,0.92)' : 'rgba(18,26,40,0.85)';
+  x.beginPath(); x.roundRect(4, 4, 504, 88, r); x.fill();
+  x.lineWidth = 6; x.strokeStyle = active ? '#ffd54f' : h.color; x.stroke();
+  x.textBaseline = 'middle'; x.textAlign = 'left'; x.fillStyle = '#fff';
+  x.font = `400 48px ${FONT}`; x.fillText(h.emoji || '', 26, 50);
+  let size = 44; const label = h.name + (h.me ? ' (du)' : '');
+  for (; size > 20; size -= 2) { x.font = `700 ${size}px ${FONT}`; if (x.measureText(label).width <= 360) break; }
+  x.fillText(label, 94, 50);
+  return tex(cv);
+}
+
+function updateHands(view) {
+  const hands = view.hands || [];
+  const key = JSON.stringify([hands.map((h) => [h.id, h.name, h.emoji, h.color, h.me ? 1 : 0, h.jail, h.cards.map((c) => c.pos + ':' + c.houses + ':' + (c.mortgaged ? 1 : 0)).join(',')]), view.turnId]);
+  if (key === handKey) return;
+  handKey = key;
+  if (handsGroup) {
+    handsGroup.traverse((o) => { if (o.isMesh) { o.geometry.dispose(); if (o.userData.tag) o.material.map.dispose(); o.material.dispose(); } });
+    scene.remove(handsGroup);
+  }
+  handsGroup = new THREE.Group(); handsGroup.visible = handsOn; handMeshes = [];
+  scene.add(handsGroup);
+  if (!hands.length) return;
+  const mine = hands.find((h) => h.me) || hands[0];
+  const idx = hands.indexOf(mine);
+  const others = hands.slice(idx + 1).concat(hands.slice(0, idx));
+  const seats = [{ seat: 'S', slot: 0, of: 1, h: mine }];
+  const sides = SEATS[Math.min(5, others.length)] || [];
+  const cnt = {}; sides.forEach((sd) => { cnt[sd] = (cnt[sd] || 0) + 1; });
+  const used = {};
+  others.slice(0, 5).forEach((h, i) => { const sd = sides[i]; const slot = used[sd] || 0; used[sd] = slot + 1; seats.push({ seat: sd, slot, of: cnt[sd], h }); });
+  const order = Object.keys(O.GROUPS);
+  const seen = new Set();
+  const cardMat = (map) => new THREE.MeshStandardMaterial({ map, roughness: 0.85, metalness: 0 });
+  seats.forEach(({ seat, slot, of, h }) => {
+    const g = new THREE.Group();
+    g.rotation.y = SEAT_ROT[seat];
+    const width = (S - 0.4) / of;
+    const cx = of === 1 ? 0 : (slot - (of - 1) / 2) * (S / of);
+    // Spalten nach Farbgruppe
+    const cols = [];
+    order.forEach((gk) => {
+      const list = h.cards.filter((c) => O.SQUARES[c.pos].group === gk).sort((a, b) => a.pos - b.pos);
+      if (list.length) cols.push(list.map((c) => ({ sq: O.SQUARES[c.pos], c })));
+    });
+    if (h.jail) cols.push(Array.from({ length: h.jail }, () => ({ jail: true })));
+    const colW = Math.min(HAND_W + 0.05, (width - 0.1) / Math.max(1, cols.length));
+    const cw = colW * 0.94;
+    const scale = cw / HAND_W;
+    let maxStack = 1;
+    cols.forEach((col, ci) => {
+      maxStack = Math.max(maxStack, col.length);
+      const x0 = cx + (ci - (cols.length - 1) / 2) * colW;
+      col.forEach((it, k) => {
+        const map = it.jail ? handJailTex() : handCardTex(it.sq, it.c.houses, it.c.mortgaged);
+        const m = new THREE.Mesh(new THREE.PlaneGeometry(cw, HAND_H * scale), cardMat(map));
+        m.rotation.x = -Math.PI / 2;
+        m.position.set(x0, -0.35 + k * 0.006, HAND_R0 + (HAND_H * scale) / 2 + k * HAND_STEP * scale);
+        m.receiveShadow = true; m.castShadow = true;
+        if (!it.jail) { m.userData.pos = it.sq.pos; handMeshes.push(m); }
+        const id = it.jail ? `${h.id}:jail${k}` : `${h.id}:${it.sq.pos}`;
+        seen.add(id);
+        if (!firstUpdate && handSeen.size && !handSeen.has(id) && !it.jail) {
+          m.scale.setScalar(0.01);
+          tweens.push({ t: 0, dur: 0.6, fn: (kk) => { m.scale.setScalar(Math.max(0.01, 1 - Math.pow(1 - Math.min(1, kk), 3) * 0.99)); }, done: () => m.scale.setScalar(1) });
+        }
+        g.add(m);
+      });
+    });
+    // Namensschild vor dem Kartenfächer
+    const tagW = Math.min(2.6, width * 0.6), tagH = tagW * 96 / 512;
+    const tag = new THREE.Mesh(new THREE.PlaneGeometry(tagW, tagH), new THREE.MeshBasicMaterial({ map: handTagTex(h, view.turnId === h.id), transparent: true }));
+    tag.rotation.x = -Math.PI / 2; tag.userData.tag = true;
+    tag.position.set(cx, -0.345, HAND_R0 + HAND_H * scale + (maxStack - 1) * HAND_STEP * scale + 0.06 + tagH / 2 + 0.12);
+    g.add(tag);
+    handsGroup.add(g);
+  });
+  handSeen = seen;
 }
 
 let firstUpdate = true;
@@ -1324,6 +1466,7 @@ export function update(view) {
     potTile.topMat.needsUpdate = true;
   }
   updateJackpot(view);
+  updateHands(view);
   layoutTokens(view, !firstUpdate);
   firstUpdate = false;
 }
