@@ -71,27 +71,60 @@ function bandSide(r) {
 
 const FONT = '"Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif';
 
+const SUFFIXES = ['straße', 'strasse', 'allee', 'platz', 'weg', 'markt', 'wiese', 'teich', 'viertel', 'bahn', 'werk', 'speicher', 'ring', 'bude', 'kai', 'lager', 'turm', 'express', 'linie', 'gasse', 'garten', 'hügel', 'mühle'];
+
+// Zu lange Einzelwörter werden umbrochen (bevorzugt vor "-straße", "-platz" ...), statt die Schrift zu verkleinern.
+let ugly = false;
+function breakWord(ctx, word, maxW) {
+  if (ctx.measureText(word).width <= maxW) return [word];
+  if (word.includes('-') && !word.endsWith('-')) return word.split(/(?<=-)/).flatMap((w) => breakWord(ctx, w, maxW));
+  const low = word.toLowerCase();
+  for (const suf of SUFFIXES) {
+    const i = low.lastIndexOf(suf);
+    if (i > 2 && i + suf.length === low.length) {
+      const a = word.slice(0, i) + (word[i - 1] === '-' ? '' : '-'), b = word.slice(i);
+      if (ctx.measureText(a).width <= maxW && ctx.measureText(b).width <= maxW) return [a, b];
+    }
+  }
+  // Silbentrennung (grob): größtes Stück, das mit "-" noch passt, an einer Silbengrenze
+  let cut = 2;
+  while (cut < word.length - 1 && ctx.measureText(word.slice(0, cut + 1) + '-').width <= maxW) cut++;
+  const V = /[aeiouäöüyAEIOUÄÖÜY]/;
+  let at = -1;
+  for (let i = cut; i >= 3; i--) {
+    const p = word[i - 1], c = word[i], n = word[i + 1] || '';
+    if ((V.test(p) && !V.test(c) && V.test(n)) || (!V.test(p) && !V.test(c))) { at = i; break; }
+  }
+  ugly = true;
+  if (at < 0) at = cut;
+  return [word.slice(0, at) + '-', ...breakWord(ctx, word.slice(at), maxW)];
+}
+
 function wrap(ctx, text, maxW) {
-  const words = String(text).split(/\s+/);
+  const words = String(text).split(/\s+/).flatMap((w) => breakWord(ctx, w, maxW));
   const lines = [];
   let cur = '';
   words.forEach((w) => {
-    const t = cur ? cur + ' ' + w : w;
+    const t = cur ? (cur.endsWith('-') ? cur + w : cur + ' ' + w) : w;
     if (ctx.measureText(t).width <= maxW || !cur) cur = t; else { lines.push(cur); cur = w; }
   });
   if (cur) lines.push(cur);
   return lines;
 }
 
+// Einheitliche Schriftgröße: Es wird umgebrochen statt verkleinert. Nur wenn es trotzdem
+// nicht in die erlaubten Zeilen passt, wird die Schrift in kleinen Schritten reduziert.
 function fitText(ctx, text, maxW, maxLines, size, weight) {
   let fs = size;
-  for (; fs >= 14; fs -= 2) {
+  const minFs = Math.round(size * 0.8);
+  for (; fs >= minFs; fs -= 2) {
     ctx.font = `${weight} ${fs}px ${FONT}`;
     const lines = wrap(ctx, text, maxW);
-    if (lines.length <= maxLines && lines.every((l) => ctx.measureText(l).width <= maxW)) return { fs, lines };
+    if (lines.length <= maxLines) return { fs, lines };
   }
-  ctx.font = `${weight} 14px ${FONT}`;
-  return { fs: 14, lines: wrap(ctx, text, maxW) };
+  fs += 2;
+  ctx.font = `${weight} ${fs}px ${FONT}`;
+  return { fs, lines: wrap(ctx, text, maxW) };
 }
 
 function drawTile(canvas, sq, r, extra) {
@@ -129,7 +162,7 @@ function drawTile(canvas, sq, r, extra) {
 
   const cx = bx + bw / 2;
   c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillStyle = '#14261b';
-  const maxW = bw - 12;
+  const maxW = bw - 8;
   const put = (text, y, size, weight, color, lines) => {
     const f = fitText(c, text, maxW, lines || 2, size, weight || '700');
     c.font = `${weight || '700'} ${f.fs}px ${FONT}`;
@@ -141,19 +174,19 @@ function drawTile(canvas, sq, r, extra) {
   const icon = (ch, y, size) => { c.font = `${size}px ${FONT}`; c.fillStyle = '#14261b'; c.fillText(ch, cx, y); };
 
   if (sq.type === 'property') {
-    put(sq.name, by + bh * 0.42, 36, '900', null, 3);
-    put(sq.price + ' ₮', by + bh * 0.84, 32, '800', '#2b4636', 1);
+    put(sq.name, by + bh * 0.4, 28, '900', null, 4);
+    put(sq.price + ' ₮', by + bh * 0.86, 28, '800', '#2b4636', 1);
   } else if (sq.type === 'station' || sq.type === 'utility') {
-    put(sq.name, by + bh * 0.62, 32, '900', null, 3);
-    put(sq.price + ' ₮', by + bh * 0.9, 30, '800', '#2b4636', 1);
+    put(sq.name, by + bh * 0.6, 28, '900', null, 4);
+    put(sq.price + ' ₮', by + bh * 0.9, 28, '800', '#2b4636', 1);
   } else if (sq.type === 'tax') {
     icon('💸', by + bh * 0.26, 50);
-    put(sq.name, by + bh * 0.58, 30, '900', null, 3);
+    put(sq.name, by + bh * 0.55, 28, '900', null, 4);
     put('zahle ' + sq.amount + ' ₮', by + bh * 0.88, 28, '800', '#2b4636', 1);
   } else if (sq.type === 'chance') {
-    icon('🔮', by + bh * 0.3, 60); put(sq.name, by + bh * 0.72, 32, '900', null, 2);
+    icon('🔮', by + bh * 0.3, 60); put(sq.name, by + bh * 0.72, 28, '900', null, 3);
   } else if (sq.type === 'community') {
-    icon('🐤', by + bh * 0.3, 60); put(sq.name, by + bh * 0.72, 32, '900', null, 2);
+    icon('🐤', by + bh * 0.3, 60); put(sq.name, by + bh * 0.72, 28, '900', null, 3);
   } else if (sq.type === 'go') {
     icon('➡️', H * 0.3, 80); put('LOS', H * 0.62, 50, '900', '#b3261c', 1); put('Ziehe 200 ₮ ein', H * 0.86, 24, '600', '#2b4636', 1);
   } else if (sq.type === 'jail') {
